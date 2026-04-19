@@ -17,6 +17,9 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Routes
+app.get('/api', (req, res) => {
+  res.json({ message: 'Welcome to the Sales App API', version: '1.0.0' });
+});
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/industries', industryRoutes);
