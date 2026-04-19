@@ -8,11 +8,22 @@ const { protect } = require('../middleware/auth');
 // @route   POST /api/auth/login
 router.post('/login', async (req, res) => {
   const { phone, password } = req.body;
+  console.log(`Login attempt for phone: ${phone}`);
 
   try {
     const user = await User.findOne({ phone }).select('+password');
 
-    if (user && (await user.comparePassword(password))) {
+    if (!user) {
+      console.log('User not found in database');
+      return res.status(401).json({ message: 'Invalid phone number or password' });
+    }
+
+    console.log(`User found: ${user.name}, Role: ${user.role}`);
+
+    const isMatch = await user.comparePassword(password);
+    console.log(`Password match: ${isMatch}`);
+
+    if (isMatch) {
       if (!user.isActive) {
         return res.status(401).json({ message: 'User account is inactive' });
       }
