@@ -12,15 +12,17 @@ router.post('/ocr', protect, upload.single('image'), async (req, res) => {
   if (!req.file) return res.status(400).json({ message: 'No image uploaded' });
 
   try {
-    // Note: Cloudinary provides req.file.path as the URL, but Vision API works best with local files or URLs.
-    // If it's a URL, Vision API can fetch it. Cloudinary URL is perfect.
     const text = await extractText(req.file.path);
     const parsedData = parseCardText(text);
     
     res.json({ text, parsedData });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'OCR processing failed' });
+    console.error('OCR Route Error:', error);
+    res.status(500).json({ 
+      message: 'OCR processing failed', 
+      details: error.message,
+      suggestion: 'Check if Google Vision API key is valid and Secret File is uploaded to Render.'
+    });
   }
 });
 

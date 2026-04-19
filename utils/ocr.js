@@ -1,30 +1,34 @@
 const vision = require('@google-cloud/vision');
-const path = require('path');
+const axios = require('axios');
 
 // Configure Google Cloud Vision client
-// Note: GOOGLE_APPLICATION_CREDENTIALS should point to the JSON key file
-// Or the credentials can be passed directly if using service account JSON content
 const client = new vision.ImageAnnotatorClient();
 
 /**
  * Extract text from image using Google Cloud Vision
- * @param {string} imagePath Local path or Buffer
+ * @param {string} imageSource Local path or Buffer or URL
  * @returns {Promise<string>} Full text extracted
  */
-async function extractText(imagePath) {
-  console.log(`Starting OCR for image: ${imagePath}`);
+async function extractText(imageSource) {
+  console.log(`Starting OCR for source: ${imageSource.substring(0, 50)}...`);
   try {
-    const [result] = await client.textDetection(imagePath);
+    let imagePayload = imageSource;
+
+    // Check if it's a URL (like from Cloudinary)
+    if (typeof imageSource === 'string' && imageSource.startsWith('http')) {
+      console.log('Downloading image from URL...');
+      const response = await axios.get(imageSource, { responseType: 'arraybuffer' });
+      imagePayload = Buffer.from(response.data, 'binary');
+      console.log('Download complete.');
+    }
+
+    const [result] = await client.textDetection(imagePayload);
     const detections = result.textAnnotations;
     const fullText = detections && detections.length > 0 ? detections[0].description : '';
     console.log('OCR Extraction successful. Full text length:', fullText.length);
-    console.log('OCR Extracted Text Snapshot:', fullText.substring(0, 100).replace(/\n/g, ' '));
     return fullText;
   } catch (error) {
-    console.error('Google Vision API Error details:', error.message);
-    if (error.code === 7) {
-      console.error('Permission denied. Please check your GOOGLE_APPLICATION_CREDENTIALS and API enablement.');
-    }
+    console.error('Google Vision API Error:', error.message);
     throw error;
   }
 }
