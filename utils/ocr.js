@@ -6,9 +6,9 @@ const axios = require('axios');
  * @returns {Promise<string>} Full text extracted
  */
 async function extractText(imageSource) {
-  const apiKey = process.env.GOOGLE_VISION_API_KEY;
+  const apiKey = process.env.GOOGLE_VISION_API_KEY || process.env.VISION_API_KEY;
   if (!apiKey) {
-    throw new Error('GOOGLE_VISION_API_KEY is not set in environment variables.');
+    throw new Error('Google Vision API Key is not set in environment variables (check GOOGLE_VISION_API_KEY or VISION_API_KEY).');
   }
 
   console.log(`Starting OCR via REST API...`);
