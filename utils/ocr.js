@@ -58,7 +58,7 @@ async function extractText(imageSource) {
  * @param {string} text 
  */
 function parseCardText(text) {
-  console.log('Parsing extracted text with refined heuristics...');
+  console.log('Parsing extracted text with multi-field heuristics...');
   const lines = text.split('\n').map(l => l.trim()).filter(l => l);
   const data = {
     companyName: '',
@@ -66,7 +66,7 @@ function parseCardText(text) {
     designation: '',
     phoneNumbers: [],
     emails: [],
-    addresses: [{ street: '', area: '', city: '' }]
+    addresses: [] // Start with empty, will populate
   };
 
   // 1. Extract Emails
@@ -74,26 +74,27 @@ function parseCardText(text) {
   const foundEmails = text.match(emailRegex);
   if (foundEmails) data.emails = [...new Set(foundEmails.map(e => e.toLowerCase()))];
 
-  // 2. Extract Phone Numbers
-  // Matches various formats: +91 9876543210, 022-1234567, etc.
-  const phoneRegex = /(?:\+|00)?(?:\d[.\s-]?){8,15}/g;
+  // 2. Extract Phone Numbers (Multiple)
+  // Matches: +91 9876543210, 022-1234567, 9876-543210
+  const phoneRegex = /(?:\+|00)?(?:\d[.\s-]?){7,15}/g;
   const foundPhones = text.match(phoneRegex);
   if (foundPhones) {
     data.phoneNumbers = [...new Set(foundPhones
       .map(p => p.trim())
       .filter(p => {
         const digits = p.replace(/\D/g, '');
-        // Filter out strings that are likely just PIN codes or year
-        return digits.length >= 8 && digits.length <= 13;
+        // Filter: typically 7-13 digits for actual numbers
+        return digits.length >= 7 && digits.length <= 13;
       })
     )];
+    console.log('Total Phones Extracted:', data.phoneNumbers.length);
   }
 
   // 3. Extract Designation & Name
   const designationKeywords = [
     'Manager', 'Director', 'CEO', 'Founder', 'Engineer', 'Sales', 'Executive', 
     'Owner', 'Partner', 'Head', 'Associate', 'President', 'Consultant', 'Proprietor',
-    'V.P.', 'Vice President', 'Chief', 'Lead'
+    'V.P.', 'Vice President', 'Chief', 'Lead', 'Prop'
   ];
 
   let designationIdx = -1;
@@ -105,56 +106,66 @@ function parseCardText(text) {
     }
   }
 
-  // If we found a designation, the line ABOVE it is very often the Name
   if (designationIdx > 0) {
     data.contactPersonName = lines[designationIdx - 1];
-    
-    // The Company Name is often the line BELOW the designation or at the very top
-    if (lines[designationIdx + 1] && !lines[designationIdx + 1].includes('@') && !/\d/.test(lines[designationIdx + 1])) {
-      data.companyName = lines[designationIdx + 1];
-    }
+  } else {
+    // Look for first 2-3 word line with no numbers or special chars
+    const nameLine = lines.find(l => {
+      const words = l.split(' ').length;
+      return words >= 2 && words <= 4 && !/\d/.test(l) && !/[@:.]/.test(l);
+    });
+    if (nameLine) data.contactPersonName = nameLine;
   }
 
-  // 4. Identify Company Name (Fallback)
-  if (!data.companyName) {
-    // Look for common company suffixes
-    const companySuffixes = ['Limited', 'Ltd', 'Pvt', 'Inc', 'Corp', 'Enterprises', 'Solutions', 'Systems', 'Group', 'Associates'];
-    const suffixLine = lines.find(l => companySuffixes.some(s => new RegExp(`\\b${s}\\b`, 'i').test(l)));
-    if (suffixLine) {
-      data.companyName = suffixLine;
-    } else if (lines.length > 0) {
-      // Often the first line is Company or Name
-      data.companyName = lines[0] === data.contactPersonName ? (lines[1] || '') : lines[0];
-    }
+  // 4. Company Name
+  const companySuffixes = ['Limited', 'Ltd', 'Pvt', 'Inc', 'Corp', 'Enterprises', 'Solutions', 'Systems', 'Group', 'Associates', 'Co.'];
+  const suffixLine = lines.find(l => companySuffixes.some(s => new RegExp(`\\b${s}\\b`, 'i').test(l)));
+  if (suffixLine) {
+    data.companyName = suffixLine;
+  } else if (lines.length > 0) {
+    data.companyName = lines[0] === data.contactPersonName ? (lines[1] || '') : lines[0];
   }
 
-  // 5. Address Extraction
-  const addressKeywords = ['Street', 'Road', 'Ave', 'Blvd', 'Lane', 'Floor', 'Building', 'Plot', 'Phase', 'Industrial', 'Sector', 'Opp', 'Near', 'Area', 'City'];
-  const pinRegex = /\b\d{5,6}\b/; // PIN/ZIP code
+  // 5. Multi-Address Extraction
+  const addressKeywords = ['Street', 'Road', 'Ave', 'Blvd', 'Lane', 'Floor', 'Building', 'Plot', 'Phase', 'Industrial', 'Sector', 'Opp', 'Near', 'Area', 'City', 'Office', 'Factory', 'Unit', 'H.O.', 'B.O.'];
+  const pinRegex = /\b\d{5,6}\b/;
 
-  const addrLines = lines.filter(l => 
+  // Find all lines that look like parts of an address
+  const potentialAddrLines = lines.filter(l => 
     (addressKeywords.some(k => new RegExp(k, 'i').test(l)) || pinRegex.test(l)) &&
     !data.emails.includes(l.toLowerCase()) &&
-    !data.phoneNumbers.includes(l)
+    !data.phoneNumbers.includes(l) &&
+    l !== data.companyName &&
+    l !== data.contactPersonName &&
+    l !== data.designation
   );
 
-  if (addrLines.length > 0) {
-    data.addresses[0].street = addrLines.join(', ');
-    
-    // Try to guess city from PIN code line
-    const cityLine = addrLines.find(l => pinRegex.test(l));
-    if (cityLine) {
-      const parts = cityLine.split(/[,\s-]/).filter(p => p.length > 3 && !/\d/.test(p));
-      if (parts.length > 0) data.addresses[0].city = parts[parts.length - 1];
+  if (potentialAddrLines.length > 0) {
+    // Try to group lines into distinct addresses
+    // Heuristic: If we see a new "PIN code" or "Office/Factory" keyword, it's likely a new address
+    let currentAddr = [];
+    potentialAddrLines.forEach((line, idx) => {
+      const isNewBlock = (idx > 0 && (pinRegex.test(line) || /Office|Factory|H\.O\.|B\.O\.|Branch|Head/i.test(line)));
+      
+      if (isNewBlock && currentAddr.length > 0) {
+        data.addresses.push({ street: currentAddr.join(', '), area: '', city: '' });
+        currentAddr = [line];
+      } else {
+        currentAddr.push(line);
+      }
+    });
+    // Push the last one
+    if (currentAddr.length > 0) {
+      data.addresses.push({ street: currentAddr.join(', '), area: '', city: '' });
     }
   }
 
-  // Final Cleanup: Remove found phones/emails from Name/Company fields if accidentally assigned
-  if (data.contactPersonName && (/\d{5,}/.test(data.contactPersonName) || data.contactPersonName.includes('@'))) {
-    data.contactPersonName = '';
+  // Fallback: If no addresses found, ensure at least one empty object
+  if (data.addresses.length === 0) {
+    data.addresses.push({ street: '', area: '', city: '' });
   }
 
-  console.log('Improved Parsed Data:', JSON.stringify(data));
+  console.log('Final Multi-Parsed Data:', JSON.stringify(data));
   return data;
 }
 
