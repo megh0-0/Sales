@@ -6,9 +6,13 @@ const axios = require('axios');
  * @returns {Promise<string>} Full text extracted
  */
 async function extractText(imageSource) {
-  const apiKey = process.env.GOOGLE_VISION_API_KEY || process.env.VISION_API_KEY;
+  const apiKey = process.env.GOOGLE_VISION_API_KEY || 
+                 process.env.VISION_API_KEY || 
+                 process.env.vision_api_key ||
+                 process.env.google_vision_api_key;
+
   if (!apiKey) {
-    throw new Error('Google Vision API Key is not set in environment variables (check GOOGLE_VISION_API_KEY or VISION_API_KEY).');
+    throw new Error('Google Vision API Key not found. Please ensure GOOGLE_VISION_API_KEY or VISION_API_KEY is set in Render Environment.');
   }
 
   console.log(`Starting OCR via REST API...`);
