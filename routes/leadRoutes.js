@@ -8,14 +8,36 @@ const fs = require('fs');
 
 // @desc    OCR for visiting cards
 // @route   POST /api/leads/ocr
-router.post('/ocr', protect, upload.single('image'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ message: 'No image uploaded' });
+router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
+  if (!req.files || req.files.length === 0) return res.status(400).json({ message: 'No images uploaded' });
 
   try {
-    const text = await extractText(req.file.path);
-    const parsedData = parseCardText(text);
+    let combinedText = '';
+    const results = [];
+
+    // Process each image (front and back)
+    for (const file of req.files) {
+      const text = await extractText(file.path);
+      combinedText += '\n' + text;
+      results.push(parseCardText(text));
+    }
+
+    // Merge results from both sides
+    const mergedData = {
+      companyName: results.find(r => r.companyName)?.companyName || '',
+      contactPersonName: results.find(r => r.contactPersonName)?.contactPersonName || '',
+      designation: results.find(r => r.designation)?.designation || '',
+      phoneNumbers: [...new Set(results.flatMap(r => r.phoneNumbers))],
+      emails: [...new Set(results.flatMap(r => r.emails))],
+      addresses: results.flatMap(r => r.addresses).filter(a => a.street)
+    };
+
+    // If no addresses were found on either side, provide one empty entry
+    if (mergedData.addresses.length === 0) {
+      mergedData.addresses = [{ street: '', area: '', city: '' }];
+    }
     
-    res.json({ text, parsedData });
+    res.json({ text: combinedText, parsedData: mergedData });
   } catch (error) {
     console.error('OCR Route Error:', error);
     res.status(500).json({ 
