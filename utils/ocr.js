@@ -147,8 +147,8 @@ function parseCardText(text) {
 
   // 6. ADVANCD MULTI-ADDRESS SEGMENTATION
   const addrMarkers = ['Plot', 'Shop', 'Unit', 'Office', 'Factory', 'Building', 'No.', 'H.O.', 'B.O.', 'Head Office', 'Branch', 'Site:', 'Works:', 'Address:', 'Addr:'];
-  const pinRegex = /\b\d{5,6}\b/;
-  const cityKeywords = ['Mumbai', 'Delhi', 'Bangalore', 'Chennai', 'Kolkata', 'Pune', 'Hyderabad', 'Ahmedabad', 'Gurgaon', 'Noida', 'Surat', 'Dubai', 'London', 'NY', 'California'];
+  const pinRegex = /\b\d{4,6}\b/; // Support 4, 5, or 6 digit codes (Bangladesh uses 4)
+  const cityKeywords = ['Dhaka', 'Chittagong', 'Khulna', 'Rajshahi', 'Sylhet', 'Barisal', 'Rangpur', 'Comilla', 'Gazipur', 'Narayanganj', 'Mumbai', 'Delhi', 'Bangalore'];
 
   let addressLines = lines.filter(l => 
     !data.emails.includes(l.toLowerCase()) && 
