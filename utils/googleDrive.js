@@ -2,37 +2,29 @@ const { google } = require('googleapis');
 const fs = require('fs');
 const stream = require('stream');
 
-// Initialize Drive API
-// Requires GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON in environment
-let drive = null;
-
-try {
-  const credentials = JSON.parse(process.env.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON);
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ['https://www.googleapis.com/auth/drive.file'],
-  });
-  drive = google.drive({ version: 'v3', auth });
-} catch (error) {
-  console.error('Google Drive Auth Error:', error.message);
-}
-
 /**
- * Upload a file to Google Drive
- * @param {Buffer|string} fileSource Buffer or Local Path
- * @param {string} fileName 
- * @param {string} mimeType 
- * @returns {Promise<string>} Web view link
+ * Upload a file to Google Drive using OAuth2 (Personal Account)
  */
 async function uploadToDrive(fileSource, fileName, mimeType) {
-  if (!drive) throw new Error('Google Drive not configured.');
-
   try {
+    const oauth2Client = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      'https://developers.google.com/oauthplayground'
+    );
+
+    oauth2Client.setCredentials({
+      refresh_token: process.env.GOOGLE_REFRESH_TOKEN
+    });
+
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+
+    // Clean Folder ID
     const rawInput = (process.env.GOOGLE_DRIVE_FOLDER_ID || '').trim();
     const idMatch = rawInput.match(/([a-zA-Z0-9_-]{25,})($|[/?&])/);
     const folderId = idMatch ? idMatch[1] : rawInput;
 
-    console.log(`Attempting upload to Drive: ${fileName}`);
+    console.log(`Uploading to Drive (Personal Quota) ID: ${folderId}`);
 
     let fileStream;
     if (Buffer.isBuffer(fileSource)) {
@@ -51,25 +43,20 @@ async function uploadToDrive(fileSource, fileName, mimeType) {
         mimeType: mimeType,
         body: fileStream,
       },
-      // Essential for Service Accounts in different environments
-      supportsAllDrives: true,
       fields: 'id',
     });
 
     const fileId = response.data.id;
 
-    // Set permission so it's viewable
+    // Grant public view permission
     await drive.permissions.create({
       fileId: fileId,
       requestBody: { role: 'reader', type: 'anyone' },
-      supportsAllDrives: true,
     });
 
     return `https://drive.google.com/uc?export=view&id=${fileId}`;
   } catch (error) {
-    if (error.message.includes('storage quota')) {
-      console.error('CRITICAL: Service Account has no storage space. You must use a Shared Drive or OAuth2.');
-    }
+    console.error('Personal Drive Upload Error:', error.message);
     throw error;
   }
 }
