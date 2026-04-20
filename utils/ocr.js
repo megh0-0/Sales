@@ -2,11 +2,11 @@ const axios = require('axios');
 const sharp = require('sharp');
 
 /**
- * Extract text AND detect crop hints for auto-cropping
+ * Extract text AND detect text orientation for auto-rotation
  * @param {string} imageSource Local path or Buffer or URL
- * @returns {Promise<{text: string, croppedImage: Buffer | null}>} 
+ * @returns {Promise<{text: string, rotatedImage: Buffer | null}>} 
  */
-async function extractTextAndCrop(imageSource) {
+async function extractTextAndRotate(imageSource) {
   const apiKey = process.env.GOOGLE_VISION_API_KEY || 
                  process.env.VISION_API_KEY || 
                  process.env.vision_api_key ||
@@ -41,8 +41,7 @@ async function extractTextAndCrop(imageSource) {
         {
           image: { content: base64Image },
           features: [
-            { type: 'TEXT_DETECTION' },
-            { type: 'CROP_HINTS' }
+            { type: 'TEXT_DETECTION' }
           ]
         }
       ]
@@ -55,33 +54,57 @@ async function extractTextAndCrop(imageSource) {
     const detections = visionData.textAnnotations;
     const fullText = detections && detections.length > 0 ? detections[0].description : '';
 
-    // 2. Auto-Cropping Logic
-    let croppedBuffer = null;
-    const cropHints = visionData.cropHintsAnnotation?.cropHints;
-    
-    if (cropHints && cropHints.length > 0 && rawBuffer) {
-      const hint = cropHints[0].boundingPoly.vertices;
-      const metadata = await sharp(rawBuffer).metadata();
+    // 2. Auto-Rotation Logic based on Text Orientation
+    let rotatedBuffer = null;
+    if (detections && detections.length > 0 && rawBuffer) {
+      // Use the first annotation (entire text block) to detect orientation
+      const vertices = detections[0].boundingPoly.vertices;
       
-      // Calculate crop box (handling normalized or pixel coords)
-      const left = Math.max(0, hint[0].x || 0);
-      const top = Math.max(0, hint[0].y || 0);
-      const right = hint[1].x || metadata.width;
-      const bottom = hint[2].y || metadata.height;
-      const width = Math.min(metadata.width - left, right - left);
-      const height = Math.min(metadata.height - top, bottom - top);
+      // Calculate angle of the top edge (v0 to v1)
+      const v0 = vertices[0];
+      const v1 = vertices[1];
+      
+      // Handle cases where x or y might be undefined (0)
+      const x0 = v0.x || 0;
+      const y0 = v0.y || 0;
+      const x1 = v1.x || 0;
+      const y1 = v1.y || 0;
+      
+      const angleRad = Math.atan2(y1 - y0, x1 - x0);
+      const angleDeg = (angleRad * 180) / Math.PI;
+      
+      // We want the text to be horizontal (angleDeg ≈ 0)
+      // Google Vision API usually aligns detections to the image. 
+      // If the image is rotated 90 deg clockwise, the text will be detected with a 90 deg angle.
+      // However, it's often more reliable to check the bounding box's aspect ratio vs the text's.
+      
+      // Simplify: Rotate to the nearest 90-degree increment to straighten
+      let rotation = 0;
+      if (angleDeg > 45 && angleDeg <= 135) rotation = -90;
+      else if (angleDeg > 135 || angleDeg <= -135) rotation = 180;
+      else if (angleDeg < -45 && angleDeg >= -135) rotation = 90;
 
-      if (width > 50 && height > 50) {
-        croppedBuffer = await sharp(rawBuffer)
-          .extract({ left: Math.round(left), top: Math.round(top), width: Math.round(width), height: Math.round(height) })
-          .toBuffer();
-        console.log('Auto-cropping successful.');
+      // Always apply auto-rotate from EXIF first
+      let sharpImg = sharp(rawBuffer).rotate(); 
+      
+      if (rotation !== 0) {
+        sharpImg = sharpImg.rotate(rotation);
+        console.log(`Auto-rotating image by ${rotation} degrees based on text.`);
       }
+
+      // After straightening, check if it should be landscape (standard for business cards)
+      const metadata = await sharpImg.metadata();
+      if (metadata.height > metadata.width) {
+        console.log('Detected portrait mode for card, rotating to landscape.');
+        sharpImg = sharpImg.rotate(90);
+      }
+
+      rotatedBuffer = await sharpImg.toBuffer();
     }
     
-    return { text: fullText, croppedImage: croppedBuffer };
+    return { text: fullText, rotatedImage: rotatedBuffer };
   } catch (error) {
-    console.error('OCR/Crop Error:', error.response?.data || error.message);
+    console.error('OCR/Rotate Error:', error.response?.data || error.message);
     throw new Error(error.response?.data?.error?.message || error.message);
   }
 }
@@ -214,4 +237,4 @@ function parseCardText(text) {
   return data;
 }
 
-module.exports = { extractTextAndCrop, parseCardText };
+module.exports = { extractTextAndRotate, parseCardText };
