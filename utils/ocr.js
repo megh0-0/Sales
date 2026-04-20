@@ -17,7 +17,6 @@ async function extractTextAndRotate(imageSource) {
   }
 
   try {
-    let base64Image = '';
     let rawBuffer = null;
 
     if (Buffer.isBuffer(imageSource)) {
@@ -32,7 +31,13 @@ async function extractTextAndRotate(imageSource) {
       throw new Error('Invalid imageSource type provided to OCR.');
     }
 
-    base64Image = rawBuffer.toString('base64');
+    // MEMORY OPTIMIZATION: Resize image to max 1024px before processing
+    // This significantly reduces memory pressure on Render's 512MB limit
+    rawBuffer = await sharp(rawBuffer)
+      .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+      .toBuffer();
+
+    const base64Image = rawBuffer.toString('base64');
 
     const visionUrl = `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`;
     
@@ -56,15 +61,12 @@ async function extractTextAndRotate(imageSource) {
 
     // 2. Auto-Rotation Logic based on Text Orientation
     let rotatedBuffer = null;
-    if (detections && detections.length > 0 && rawBuffer) {
-      // Use the first annotation (entire text block) to detect orientation
+    if (detections && detections.length > 0) {
       const vertices = detections[0].boundingPoly.vertices;
       
-      // Calculate angle of the top edge (v0 to v1)
       const v0 = vertices[0];
       const v1 = vertices[1];
       
-      // Handle cases where x or y might be undefined (0)
       const x0 = v0.x || 0;
       const y0 = v0.y || 0;
       const x1 = v1.x || 0;
@@ -73,33 +75,23 @@ async function extractTextAndRotate(imageSource) {
       const angleRad = Math.atan2(y1 - y0, x1 - x0);
       const angleDeg = (angleRad * 180) / Math.PI;
       
-      // We want the text to be horizontal (angleDeg ≈ 0)
-      // Google Vision API usually aligns detections to the image. 
-      // If the image is rotated 90 deg clockwise, the text will be detected with a 90 deg angle.
-      // However, it's often more reliable to check the bounding box's aspect ratio vs the text's.
-      
-      // Simplify: Rotate to the nearest 90-degree increment to straighten
       let rotation = 0;
       if (angleDeg > 45 && angleDeg <= 135) rotation = -90;
       else if (angleDeg > 135 || angleDeg <= -135) rotation = 180;
       else if (angleDeg < -45 && angleDeg >= -135) rotation = 90;
 
-      // Always apply auto-rotate from EXIF first
       let sharpImg = sharp(rawBuffer).rotate(); 
       
       if (rotation !== 0) {
         sharpImg = sharpImg.rotate(rotation);
-        console.log(`Auto-rotating image by ${rotation} degrees based on text.`);
       }
 
-      // After straightening, check if it should be landscape (standard for business cards)
       const metadata = await sharpImg.metadata();
       if (metadata.height > metadata.width) {
-        console.log('Detected portrait mode for card, rotating to landscape.');
         sharpImg = sharpImg.rotate(90);
       }
 
-      rotatedBuffer = await sharpImg.toBuffer();
+      rotatedBuffer = await sharpImg.jpeg({ quality: 80 }).toBuffer();
     }
     
     return { text: fullText, rotatedImage: rotatedBuffer };
