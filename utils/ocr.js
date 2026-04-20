@@ -1,11 +1,12 @@
 const axios = require('axios');
+const sharp = require('sharp');
 
 /**
- * Extract text from image using Google Cloud Vision REST API
+ * Extract text AND detect crop hints for auto-cropping
  * @param {string} imageSource Local path or Buffer or URL
- * @returns {Promise<string>} Full text extracted
+ * @returns {Promise<{text: string, croppedImage: Buffer | null}>} 
  */
-async function extractText(imageSource) {
+async function extractTextAndCrop(imageSource) {
   const apiKey = process.env.GOOGLE_VISION_API_KEY || 
                  process.env.VISION_API_KEY || 
                  process.env.vision_api_key ||
@@ -15,20 +16,19 @@ async function extractText(imageSource) {
     throw new Error('Google Vision API Key not found. Please ensure GOOGLE_VISION_API_KEY or VISION_API_KEY is set in Render Environment.');
   }
 
-  console.log(`Starting OCR via REST API...`);
   try {
     let base64Image = '';
+    let rawBuffer = null;
 
     // If it's a URL, download it
     if (typeof imageSource === 'string' && imageSource.startsWith('http')) {
       const response = await axios.get(imageSource, { responseType: 'arraybuffer' });
-      base64Image = Buffer.from(response.data, 'binary').toString('base64');
+      rawBuffer = Buffer.from(response.data, 'binary');
     } else {
-      // If it's a local file path
       const fs = require('fs');
-      const imageFile = fs.readFileSync(imageSource);
-      base64Image = Buffer.from(imageFile).toString('base64');
+      rawBuffer = fs.readFileSync(imageSource);
     }
+    base64Image = rawBuffer.toString('base64');
 
     const visionUrl = `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`;
     
@@ -36,19 +36,48 @@ async function extractText(imageSource) {
       requests: [
         {
           image: { content: base64Image },
-          features: [{ type: 'TEXT_DETECTION' }]
+          features: [
+            { type: 'TEXT_DETECTION' },
+            { type: 'CROP_HINTS' }
+          ]
         }
       ]
     };
 
     const response = await axios.post(visionUrl, payload);
-    const detections = response.data.responses[0].textAnnotations;
-    const fullText = detections && detections.length > 0 ? detections[0].description : '';
+    const visionData = response.data.responses[0];
     
-    console.log('OCR REST Extraction successful.');
-    return fullText;
+    // 1. Text Extraction
+    const detections = visionData.textAnnotations;
+    const fullText = detections && detections.length > 0 ? detections[0].description : '';
+
+    // 2. Auto-Cropping Logic
+    let croppedBuffer = null;
+    const cropHints = visionData.cropHintsAnnotation?.cropHints;
+    
+    if (cropHints && cropHints.length > 0 && rawBuffer) {
+      const hint = cropHints[0].boundingPoly.vertices;
+      const metadata = await sharp(rawBuffer).metadata();
+      
+      // Calculate crop box (handling normalized or pixel coords)
+      const left = Math.max(0, hint[0].x || 0);
+      const top = Math.max(0, hint[0].y || 0);
+      const right = hint[1].x || metadata.width;
+      const bottom = hint[2].y || metadata.height;
+      const width = Math.min(metadata.width - left, right - left);
+      const height = Math.min(metadata.height - top, bottom - top);
+
+      if (width > 50 && height > 50) {
+        croppedBuffer = await sharp(rawBuffer)
+          .extract({ left: Math.round(left), top: Math.round(top), width: Math.round(width), height: Math.round(height) })
+          .toBuffer();
+        console.log('Auto-cropping successful.');
+      }
+    }
+    
+    return { text: fullText, croppedImage: croppedBuffer };
   } catch (error) {
-    console.error('Google Vision REST Error:', error.response?.data || error.message);
+    console.error('OCR/Crop Error:', error.response?.data || error.message);
     throw new Error(error.response?.data?.error?.message || error.message);
   }
 }
@@ -66,37 +95,23 @@ function parseCardText(text) {
     designation: '',
     phoneNumbers: [],
     emails: [],
-    addresses: [] // Start with empty, will populate
+    addresses: []
   };
 
-  // 1. Extract Emails
   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
   const foundEmails = text.match(emailRegex);
   if (foundEmails) data.emails = [...new Set(foundEmails.map(e => e.toLowerCase()))];
 
-  // 2. Extract Phone Numbers (Multiple)
-  // Matches: +91 9876543210, 022-1234567, 9876-543210
   const phoneRegex = /(?:\+|00)?(?:\d[.\s-]?){7,15}/g;
   const foundPhones = text.match(phoneRegex);
   if (foundPhones) {
-    data.phoneNumbers = [...new Set(foundPhones
-      .map(p => p.trim())
-      .filter(p => {
-        const digits = p.replace(/\D/g, '');
-        // Filter: typically 7-13 digits for actual numbers
-        return digits.length >= 7 && digits.length <= 13;
-      })
-    )];
-    console.log('Total Phones Extracted:', data.phoneNumbers.length);
+    data.phoneNumbers = [...new Set(foundPhones.map(p => p.trim()).filter(p => {
+      const digits = p.replace(/\D/g, '');
+      return digits.length >= 7 && digits.length <= 13;
+    }))];
   }
 
-  // 3. Extract Designation & Name
-  const designationKeywords = [
-    'Manager', 'Director', 'CEO', 'Founder', 'Engineer', 'Sales', 'Executive', 
-    'Owner', 'Partner', 'Head', 'Associate', 'President', 'Consultant', 'Proprietor',
-    'V.P.', 'Vice President', 'Chief', 'Lead', 'Prop'
-  ];
-
+  const designationKeywords = ['Manager', 'Director', 'CEO', 'Founder', 'Engineer', 'Sales', 'Executive', 'Owner', 'Partner', 'Head', 'Associate', 'President', 'Consultant', 'Proprietor', 'V.P.', 'Vice President', 'Chief', 'Lead', 'Prop'];
   let designationIdx = -1;
   for (let i = 0; i < lines.length; i++) {
     if (designationKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(lines[i]))) {
@@ -109,7 +124,6 @@ function parseCardText(text) {
   if (designationIdx > 0) {
     data.contactPersonName = lines[designationIdx - 1];
   } else {
-    // Look for first 2-3 word line with no numbers or special chars
     const nameLine = lines.find(l => {
       const words = l.split(' ').length;
       return words >= 2 && words <= 4 && !/\d/.test(l) && !/[@:.]/.test(l);
@@ -117,7 +131,6 @@ function parseCardText(text) {
     if (nameLine) data.contactPersonName = nameLine;
   }
 
-  // 4. Company Name
   const companySuffixes = ['Limited', 'Ltd', 'Pvt', 'Inc', 'Corp', 'Enterprises', 'Solutions', 'Systems', 'Group', 'Associates', 'Co.'];
   const suffixLine = lines.find(l => companySuffixes.some(s => new RegExp(`\\b${s}\\b`, 'i').test(l)));
   if (suffixLine) {
@@ -126,30 +139,19 @@ function parseCardText(text) {
     data.companyName = lines[0] === data.contactPersonName ? (lines[1] || '') : lines[0];
   }
 
-  // 5. Multi-Address Extraction (Refined)
   const addressStartKeywords = ['Plot', 'Shop', 'Unit', 'Office', 'Factory', 'Building', 'No.', 'H.O.', 'B.O.', 'Head Office', 'Branch Office', 'Works:'];
   const pinRegex = /\b\d{5,6}\b/;
-
-  // Collect potential lines, excluding already identified fields
   const potentialAddrLines = lines.filter(l => 
-    !data.emails.includes(l.toLowerCase()) &&
-    !data.phoneNumbers.includes(l) &&
-    l !== data.companyName &&
-    l !== data.contactPersonName &&
-    l !== data.designation &&
+    !data.emails.includes(l.toLowerCase()) && !data.phoneNumbers.includes(l) &&
+    l !== data.companyName && l !== data.contactPersonName && l !== data.designation &&
     (l.length > 5 || pinRegex.test(l))
   );
 
   if (potentialAddrLines.length > 0) {
     let currentAddr = [];
     potentialAddrLines.forEach((line, idx) => {
-      // Logic for starting a new address block:
-      // 1. Line starts with a known "Start Keyword"
-      // 2. Previous line had a PIN code (addresses usually end with PIN)
-      // 3. Current line is significantly separate from the previous one in the array
       const startsWithKeyword = addressStartKeywords.some(k => new RegExp(`^${k}`, 'i').test(line));
       const prevHadPin = idx > 0 && pinRegex.test(potentialAddrLines[idx - 1]);
-      
       if ((startsWithKeyword || prevHadPin) && currentAddr.length > 0) {
         data.addresses.push({ street: currentAddr.join(', '), area: '', city: '' });
         currentAddr = [line];
@@ -157,31 +159,20 @@ function parseCardText(text) {
         currentAddr.push(line);
       }
     });
-    if (currentAddr.length > 0) {
-      data.addresses.push({ street: currentAddr.join(', '), area: '', city: '' });
+    if (currentAddr.length > 0) data.addresses.push({ street: currentAddr.join(', '), area: '', city: '' });
+  }
+
+  data.addresses = data.addresses.filter(a => a.street.length > 10).map(a => {
+    const pinMatch = a.street.match(pinRegex);
+    if (pinMatch) {
+      const parts = a.street.split(pinMatch[0])[0].split(/[,\s-]/).filter(p => p.length > 2);
+      if (parts.length > 0) a.city = parts[parts.length - 1];
     }
-  }
+    return a;
+  });
 
-  // Deduplicate and clean addresses
-  data.addresses = data.addresses
-    .filter(a => a.street.length > 10) // Filter out noise
-    .map(a => {
-      // Try to extract city (last word before PIN or last word of line)
-      const pinMatch = a.street.match(pinRegex);
-      if (pinMatch) {
-        const parts = a.street.split(pinMatch[0])[0].split(/[,\s-]/).filter(p => p.length > 2);
-        if (parts.length > 0) a.city = parts[parts.length - 1];
-      }
-      return a;
-    });
-
-  // Fallback: If no addresses found, ensure at least one empty object
-  if (data.addresses.length === 0) {
-    data.addresses.push({ street: '', area: '', city: '' });
-  }
-
-  console.log('Final Multi-Parsed Data:', JSON.stringify(data));
+  if (data.addresses.length === 0) data.addresses.push({ street: '', area: '', city: '' });
   return data;
 }
 
-module.exports = { extractText, parseCardText };
+module.exports = { extractTextAndCrop, parseCardText };

@@ -14,30 +14,36 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
   try {
     let combinedText = '';
     const results = [];
+    const croppedImages = [];
 
-    // Process each image (front and back)
+    // Process each image
     for (const file of req.files) {
-      const text = await extractText(file.path);
+      const { text, croppedImage } = await extractTextAndCrop(file.path);
       combinedText += '\n' + text;
       results.push(parseCardText(text));
+      
+      if (croppedImage) {
+        // In a real production app, we would upload this cropped buffer to Drive/Cloudinary
+        // For the autofill preview, we can return it as a base64 string
+        croppedImages.push(`data:image/jpeg;base64,${croppedImage.toString('base64')}`);
+      }
     }
 
-    // Merge results from both sides
+    // Merge results
     const mergedData = {
       companyName: results.find(r => r.companyName)?.companyName || '',
       contactPersonName: results.find(r => r.contactPersonName)?.contactPersonName || '',
       designation: results.find(r => r.designation)?.designation || '',
       phoneNumbers: [...new Set(results.flatMap(r => r.phoneNumbers))],
       emails: [...new Set(results.flatMap(r => r.emails))],
-      addresses: results.flatMap(r => r.addresses).filter(a => a.street)
+      addresses: results.flatMap(r => r.addresses).filter(a => a.street.length > 5)
     };
 
-    // If no addresses were found on either side, provide one empty entry
     if (mergedData.addresses.length === 0) {
       mergedData.addresses = [{ street: '', area: '', city: '' }];
     }
     
-    res.json({ text: combinedText, parsedData: mergedData });
+    res.json({ text: combinedText, parsedData: mergedData, croppedImages });
   } catch (error) {
     console.error('OCR Route Error:', error);
     res.status(500).json({ 
