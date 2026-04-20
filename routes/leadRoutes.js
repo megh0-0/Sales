@@ -2,23 +2,9 @@ const express = require('express');
 const router = express.Router();
 const Lead = require('../models/Lead');
 const { protect } = require('../middleware/auth');
-const { upload, cloudinary } = require('../middleware/upload');
+const { upload } = require('../middleware/upload');
 const { extractTextAndRotate, parseCardIntelligence } = require('../utils/ocr');
-const streamifier = require('streamifier');
-
-// Helper to upload Buffer to Cloudinary
-const uploadBuffer = (buffer, folder) => {
-  return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      { folder: `sales_pro/${folder}` },
-      (error, result) => {
-        if (error) reject(error);
-        else resolve(result.secure_url);
-      }
-    );
-    streamifier.createReadStream(buffer).pipe(uploadStream);
-  });
-};
+const { uploadToDrive } = require('../utils/googleDrive');
 
 // @desc    OCR for visiting cards
 router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
@@ -36,7 +22,6 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
       }
     }
 
-    // Merge results intelligently
     const mergedData = {
       companyName: '',
       contactPersonName: '',
@@ -82,16 +67,22 @@ router.post('/', protect, upload.fields([
       addresses: JSON.parse(req.body.addresses || '[]'),
     };
 
-    // Upload files to Cloudinary
-    if (req.files['visitingCardFront']) {
-      leadData.visitingCardFront = await uploadBuffer(req.files['visitingCardFront'][0].buffer, 'cards');
-    }
-    if (req.files['visitingCardBack']) {
-      leadData.visitingCardBack = await uploadBuffer(req.files['visitingCardBack'][0].buffer, 'cards');
-    }
-    if (req.files['attachment']) {
-      leadData.attachment = await uploadBuffer(req.files['attachment'][0].buffer, 'attachments');
-    }
+    const processUpload = async (fileKey, fileName) => {
+      if (req.files[fileKey]) {
+        const file = req.files[fileKey][0];
+        return await uploadToDrive(file.buffer, `${Date.now()}_${fileName}`, file.mimetype);
+      }
+      return null;
+    };
+
+    const frontUrl = await processUpload('visitingCardFront', 'card_front.jpg');
+    if (frontUrl) leadData.visitingCardFront = frontUrl;
+
+    const backUrl = await processUpload('visitingCardBack', 'card_back.jpg');
+    if (backUrl) leadData.visitingCardBack = backUrl;
+
+    const attachUrl = await processUpload('attachment', 'attachment_file');
+    if (attachUrl) leadData.attachment = attachUrl;
 
     const lead = await Lead.create(leadData);
     res.status(201).json(lead);
@@ -101,7 +92,6 @@ router.post('/', protect, upload.fields([
   }
 });
 
-// GET, PUT routes... (keeping them as is)
 router.get('/', protect, async (req, res) => {
   try {
     let query = {};
