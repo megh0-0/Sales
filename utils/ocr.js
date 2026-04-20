@@ -5,7 +5,11 @@ const sharp = require('sharp');
  * Extract text AND detect visual metadata for high-precision parsing
  */
 async function extractTextAndRotate(imageSource) {
-  const apiKey = process.env.GOOGLE_VISION_API_KEY || process.env.VISION_API_KEY || process.env.vision_api_key;
+  const apiKey = process.env.GOOGLE_VISION_API_KEY || 
+                 process.env.VISION_API_KEY || 
+                 process.env.vision_api_key ||
+                 process.env.google_vision_api_key;
+
   if (!apiKey) throw new Error('Google Vision API Key not found.');
 
   try {
@@ -20,6 +24,7 @@ async function extractTextAndRotate(imageSource) {
       rawBuffer = fs.readFileSync(imageSource);
     }
 
+    // Resize for memory efficiency
     rawBuffer = await sharp(rawBuffer).rotate().resize(1200, 1200, { fit: 'inside', withoutEnlargement: true }).toBuffer();
     const base64Image = rawBuffer.toString('base64');
 
@@ -115,7 +120,6 @@ function parseCardIntelligence(fullText, detections) {
   for (let i = 0; i < filteredLines.length; i++) {
     const line = filteredLines[i];
     if (desigKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(line))) {
-      // Ensure it's not a name with prefixes
       if (!/Md\.|Engr\.|Mohammad/i.test(line)) {
         data.designation = line;
         desigIdx = i;
@@ -126,9 +130,8 @@ function parseCardIntelligence(fullText, detections) {
 
   // 3. Identify Contact Person Name
   const namePrefixes = ['Engr.', 'Md.', 'Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Mohammad', 'S.M.', 'Sheikh'];
-  const nameSuffixes = ['Ahmed', 'Ali', 'Hossain', 'Islam', 'Khan', 'Rahman', 'Sheikh', 'Talukder', 'Uddin', 'Chowdhury'];
   
-  const prefixMatch = filteredLines.find(l => namePrefixes.some(p => l.startsWith(p)));
+  const prefixMatch = filteredLines.find(l => namePrefixes.some(p => l.includes(p)));
   if (prefixMatch) {
     data.contactPersonName = prefixMatch;
   } else if (desigIdx > 0) {
@@ -141,7 +144,6 @@ function parseCardIntelligence(fullText, detections) {
   // 4. Identify Company Name
   const corpSuffixes = ['Ltd', 'Limited', 'Pvt', 'Inc', 'Corp', 'Group', 'Industries', 'Solutions', 'Associates', 'Trading', 'Contractors', 'Agency', 'Co.', 'Equipments', 'Marine', 'Automation', 'Enterprise'];
   
-  // Look for line with suffix
   const potentialCompanies = filteredLines.filter(l => 
     l !== data.contactPersonName && 
     l !== data.designation && 
@@ -149,22 +151,20 @@ function parseCardIntelligence(fullText, detections) {
   );
 
   if (potentialCompanies.length > 0) {
-    // Pick the longest line with a suffix (often the full name)
     data.companyName = potentialCompanies.sort((a, b) => b.length - a.length)[0];
   } else {
-    // If no suffix, take first line that isn't name/designation/address-looking
     const firstGood = filteredLines.find(l => 
       l !== data.contactPersonName && 
       l !== data.designation && 
       l.length > 3 &&
       !l.includes(',') &&
       !/\d{4}/.test(l) &&
-      !namePrefixes.some(p => l.startsWith(p))
+      !namePrefixes.some(p => l.includes(p))
     );
     data.companyName = firstGood || '';
   }
 
-  // 5. Multi-Address Extraction (Aggressive Segmenting)
+  // 5. Multi-Address Extraction
   const addrMarkers = ['Plot', 'Shop', 'Unit', 'Office', 'Factory', 'Building', 'No.', 'H.O.', 'B.O.', 'Mansion', 'Lane', 'Dewanhat', 'Mooring', 'Dhaka', 'Chattogram', 'Chittagong', 'Bangladesh', 'Strand', 'Road', 'Floor', 'Street', 'Avenue', 'Block', 'Sector', 'Mam Goli'];
   const pinRegex = /\d{4,6}/;
 
@@ -178,11 +178,6 @@ function parseCardIntelligence(fullText, detections) {
     let current = [];
     
     addressLines.forEach((line, idx) => {
-      // Triggers for a NEW address block:
-      // 1. Line starts with a location identifier (Plot, No, Habib, 110)
-      // 2. Line contains "Office", "Branch", "Factory"
-      // 3. Significant logical break (previous line had a PIN/Country)
-      
       const isExplicitNew = /Office|Branch|Factory|Head Office|H\.O\.|B\.O\.|Works/i.test(line);
       const startsWithLoc = /Habib|Mansion|Plot|Unit|No|^\d+/i.test(line);
       const prevEnded = idx > 0 && (pinRegex.test(addressLines[idx - 1]) || addressLines[idx - 1].toLowerCase().includes('bangladesh'));
