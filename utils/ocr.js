@@ -20,14 +20,18 @@ async function extractTextAndCrop(imageSource) {
     let base64Image = '';
     let rawBuffer = null;
 
-    // If it's a URL, download it
-    if (typeof imageSource === 'string' && imageSource.startsWith('http')) {
+    if (Buffer.isBuffer(imageSource)) {
+      rawBuffer = imageSource;
+    } else if (typeof imageSource === 'string' && imageSource.startsWith('http')) {
       const response = await axios.get(imageSource, { responseType: 'arraybuffer' });
       rawBuffer = Buffer.from(response.data, 'binary');
-    } else {
+    } else if (typeof imageSource === 'string') {
       const fs = require('fs');
       rawBuffer = fs.readFileSync(imageSource);
+    } else {
+      throw new Error('Invalid imageSource type provided to OCR.');
     }
+
     base64Image = rawBuffer.toString('base64');
 
     const visionUrl = `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`;
