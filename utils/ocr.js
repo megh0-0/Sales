@@ -20,6 +20,7 @@ async function extractTextAndRotate(imageSource) {
       rawBuffer = fs.readFileSync(imageSource);
     }
 
+    // Resize for memory efficiency
     rawBuffer = await sharp(rawBuffer).resize(1200, 1200, { fit: 'inside', withoutEnlargement: true }).toBuffer();
     const base64Image = rawBuffer.toString('base64');
 
@@ -50,7 +51,11 @@ async function extractTextAndRotate(imageSource) {
       rotatedBuffer = await sharpImg.jpeg({ quality: 85 }).toBuffer();
     }
     
-    return { detections, rotatedImage: rotatedBuffer };
+    return { 
+      fullText: detections && detections.length > 0 ? detections[0].description : '',
+      detections: detections || [], 
+      rotatedImage: rotatedBuffer 
+    };
   } catch (error) {
     console.error('OCR/Rotate Error:', error.message);
     throw error;
@@ -58,35 +63,13 @@ async function extractTextAndRotate(imageSource) {
 }
 
 /**
- * Intelligent visual-spatial parser for business cards
+ * Enhanced parsing logic using both raw text and visual coordinates
  */
-function parseCardVisual(detections) {
-  if (!detections || detections.length === 0) return null;
+function parseCardIntelligence(fullText, detections) {
+  if (!fullText) return null;
 
-  console.log('--- STARTING VISUAL-SPATIAL PARSING ---');
+  console.log('--- STARTING PRECISION HYBRID PARSING ---');
   
-  // The first detection is the full text. We use the others (fragments) to reconstruct visual lines.
-  const fragments = detections.slice(1);
-  
-  // Group fragments into visual lines based on Y-coordinates
-  let visualLines = [];
-  fragments.forEach(f => {
-    const y = f.boundingPoly.vertices[0].y || 0;
-    const h = (f.boundingPoly.vertices[2].y || 0) - y;
-    const text = f.description;
-    
-    let line = visualLines.find(l => Math.abs(l.y - y) < 10);
-    if (line) {
-      line.text += ' ' + text;
-      line.height = Math.max(line.height, h);
-    } else {
-      visualLines.push({ text, y, height: h });
-    }
-  });
-
-  // Sort lines by vertical position
-  visualLines.sort((a, b) => a.y - b.y);
-
   const data = {
     companyName: '',
     contactPersonName: '',
@@ -96,71 +79,94 @@ function parseCardVisual(detections) {
     addresses: []
   };
 
-  const designationKeywords = ['Officer', 'Manager', 'Director', 'CEO', 'Founder', 'Engineer', 'Sales', 'Executive', 'Owner', 'Partner', 'President', 'Consultant', 'Proprietor', 'V.P.', 'Chief', 'Lead', 'Associate', 'Representative'];
-  const companySuffixes = ['Ltd', 'Limited', 'Pvt', 'Inc', 'Corp', 'Group', 'Industries', 'Solutions', 'Associates', 'Trading', 'Contractors', 'Agency', 'Company', 'Co.'];
-  const pinRegex = /\b\d{4,6}\b/;
+  // 1. Precise Emails (from full text)
+  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+  data.emails = [...new Set((fullText.match(emailRegex) || []).map(e => e.toLowerCase()))];
 
-  // 1. Identify Emails & Phones (Easy)
-  const fullText = detections[0].description;
-  data.emails = [...new Set((fullText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []).map(e => e.toLowerCase()))];
-  data.phoneNumbers = [...new Set((fullText.match(/(?:\+|00)?(?:\d[.\s-]?){8,15}/g) || []).filter(p => {
+  // 2. Precise Phones (from full text)
+  const phoneRegex = /(?:\+|00)?(?:\d[.\s-]?){7,15}/g;
+  data.phoneNumbers = [...new Set((fullText.match(phoneRegex) || []).filter(p => {
     const d = p.replace(/\D/g, '');
-    return d.length >= 8 && d.length <= 13;
+    return d.length >= 7 && d.length <= 13;
   }).map(p => p.trim()))];
 
-  // 2. Identify Designation
+  // --- Visual Line Reconstruction ---
+  const fragments = (detections || []).slice(1);
+  let visualLines = [];
+  fragments.forEach(f => {
+    const y = f.boundingPoly.vertices[0].y || 0;
+    const h = (f.boundingPoly.vertices[2].y || 0) - y;
+    const text = f.description.trim();
+    if (text.length < 1 || /^[\W_]+$/.test(text)) return; // Filter noise like ") . ,"
+
+    let line = visualLines.find(l => Math.abs(l.y - y) < 8); // Tight tolerance
+    if (line) {
+      line.text += ' ' + text;
+      line.height = Math.max(line.height, h);
+    } else {
+      visualLines.push({ text, y, height: h });
+    }
+  });
+  visualLines.sort((a, b) => a.y - b.y);
+
+  // 3. Designation Identification
+  const designationKeywords = ['Officer', 'Manager', 'Director', 'CEO', 'Founder', 'Engineer', 'Sales', 'Executive', 'Owner', 'Partner', 'President', 'Consultant', 'Proprietor', 'V.P.', 'Chief', 'Lead', 'Associate', 'Representative', 'Prop.'];
+  
   let desigLineIdx = -1;
   for (let i = 0; i < visualLines.length; i++) {
-    const l = visualLines[i];
-    if (designationKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(l.text))) {
-      data.designation = l.text;
+    if (designationKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(visualLines[i].text))) {
+      data.designation = visualLines[i].text;
       desigLineIdx = i;
       break;
     }
   }
 
-  // 3. Identify Contact Person Name
-  // Never a designation. Usually the line above designation or the largest font line that isn't company.
+  // 4. Contact Person Name
+  // Logic: Not a designation, not an email, not too long, usually above designation
+  const isDesignation = (txt) => designationKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(txt));
+  
   if (desigLineIdx > 0) {
     const above = visualLines[desigLineIdx - 1].text;
-    // Check if line above looks like a name (not a designation, not too long)
-    if (!designationKeywords.some(k => above.toLowerCase().includes(k.toLowerCase())) && above.length < 40) {
+    if (!isDesignation(above) && !above.includes('@') && above.length < 35 && !/\d{5,}/.test(above)) {
       data.contactPersonName = above;
     }
   }
-  
+
   if (!data.contactPersonName) {
-    const nameLine = visualLines.find(l => {
+    const potential = visualLines.find(l => {
       const words = l.text.split(' ').length;
-      return words >= 2 && words <= 4 && !/\d/.test(l.text) && !l.text.includes('@') && 
-             !designationKeywords.some(k => l.text.toLowerCase().includes(k.toLowerCase()));
+      return words >= 2 && words <= 4 && !/\d/.test(l.text) && !l.text.includes('@') && !isDesignation(l.text);
     });
-    if (nameLine) data.contactPersonName = nameLine.text;
+    if (potential) data.contactPersonName = potential.text;
   }
 
-  // 4. Identify Company Name
-  // Priority 1: Line with corporate suffix
-  const suffixLine = visualLines.find(l => companySuffixes.some(s => new RegExp(`\\b${s}\\b`, 'i').test(l.text)));
+  // 5. Company Name Identification
+  const corpSuffixes = ['Ltd', 'Limited', 'Pvt', 'Inc', 'Corp', 'Group', 'Industries', 'Solutions', 'Associates', 'Trading', 'Contractors', 'Agency', 'Co.', 'Works'];
+  
+  const suffixLine = visualLines.find(l => corpSuffixes.some(s => new RegExp(`\\b${s}\\b`, 'i').test(l.text)));
   if (suffixLine) {
     data.companyName = suffixLine.text;
   } else {
-    // Priority 2: Tallext text (largest font) that isn't name or designation
-    const sortedByHeight = [...visualLines].sort((a, b) => b.height - a.height);
-    const tallest = sortedByHeight.find(l => 
+    // Largest font that isn't name/designation/email/address
+    const tallest = [...visualLines].sort((a, b) => b.height - a.height).find(l => 
       l.text !== data.contactPersonName && 
       l.text !== data.designation && 
       !l.text.includes('@') && 
-      !/\d{5,}/.test(l.text)
+      !/\d{7,}/.test(l.text) &&
+      !/Dhaka|Road|Street|Plot|Office/i.test(l.text)
     );
     if (tallest) data.companyName = tallest.text;
   }
 
-  // 5. Multi-Address with "Gap Detection"
+  // 6. Address Segmentation (Gap + Keyword based)
+  const pinRegex = /\b\d{4,6}\b/;
+  const cityKeywords = ['Dhaka', 'Chittagong', 'Khulna', 'Sylhet', 'Rajshahi', 'Mumbai', 'Delhi', 'Dubai'];
+
   const addressLines = visualLines.filter(l => 
     l.text !== data.companyName && l.text !== data.contactPersonName && l.text !== data.designation &&
     !data.emails.some(e => l.text.toLowerCase().includes(e)) && 
     !data.phoneNumbers.some(p => l.text.includes(p)) &&
-    (l.text.includes(',') || pinRegex.test(l.text) || /Plot|Unit|Office|Road|Street|Floor|Dhaka|Chittagong/i.test(l.text))
+    (l.text.includes(',') || pinRegex.test(l.text) || /Plot|Unit|Office|Road|Street|Floor|Dhaka|Factory|Branch/i.test(l.text))
   );
 
   if (addressLines.length > 0) {
@@ -169,9 +175,9 @@ function parseCardVisual(detections) {
       let isNewBlock = false;
       if (idx > 0) {
         const prev = addressLines[idx - 1];
-        const gap = l.y - (prev.y + prev.height);
-        // If vertical gap is > 3x the average line height, it's a new address
-        if (gap > (prev.height * 2.5) || /Office|Branch|Factory|Head/i.test(l.text)) {
+        const verticalGap = l.y - (prev.y + prev.height);
+        // If vertical gap is large (> 2.5x height), it's a new location
+        if (verticalGap > (prev.height * 2.5) || /Office|Branch|Factory|Head Office|Works/i.test(l.text)) {
           isNewBlock = true;
         }
       }
@@ -186,12 +192,24 @@ function parseCardVisual(detections) {
     if (currentBlock.length > 0) data.addresses.push({ street: currentBlock.join(', '), area: '', city: '' });
   }
 
-  // Final Cleanup
+  // Final Cleanup: Try to extract city from street string
+  data.addresses = data.addresses.map(addr => {
+    const streetTxt = addr.street;
+    let city = '';
+    const cityMatch = cityKeywords.find(c => new RegExp(`\\b${c}\\b`, 'i').test(streetTxt));
+    if (cityMatch) city = cityMatch;
+    else {
+      const parts = streetTxt.split(/[,\s-]/).filter(p => p.length > 3 && !/\d/.test(p));
+      if (parts.length > 0) city = parts[parts.length - 1];
+    }
+    return { ...addr, city };
+  });
+
   if (data.addresses.length === 0) data.addresses = [{ street: '', area: '', city: '' }];
-  
-  console.log('--- FINAL PRO PARSED DATA ---');
+
+  console.log('--- FINAL INTELLIGENT PARSED DATA ---');
   console.log(JSON.stringify(data, null, 2));
   return data;
 }
 
-module.exports = { extractTextAndRotate, parseCardVisual };
+module.exports = { extractTextAndRotate, parseCardIntelligence };

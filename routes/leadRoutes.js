@@ -3,7 +3,7 @@ const router = express.Router();
 const Lead = require('../models/Lead');
 const { protect } = require('../middleware/auth');
 const { upload } = require('../middleware/upload');
-const { extractTextAndRotate, parseCardVisual } = require('../utils/ocr');
+const { extractTextAndRotate, parseCardIntelligence } = require('../utils/ocr');
 const { uploadToDrive } = require('../utils/googleDrive');
 
 // @desc    OCR for visiting cards
@@ -16,8 +16,8 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
     const rotatedImages = [];
 
     for (const file of req.files) {
-      const { detections, rotatedImage } = await extractTextAndRotate(file.buffer);
-      results.push(parseCardVisual(detections));
+      const { fullText, detections, rotatedImage } = await extractTextAndRotate(file.buffer);
+      results.push(parseCardIntelligence(fullText, detections));
       
       if (rotatedImage) {
         rotatedImages.push(`data:image/jpeg;base64,${rotatedImage.toString('base64')}`);
