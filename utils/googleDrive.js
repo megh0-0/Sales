@@ -28,14 +28,12 @@ async function uploadToDrive(fileSource, fileName, mimeType) {
   if (!drive) throw new Error('Google Drive not configured.');
 
   try {
-    // Sanitize Folder ID (handle full URL or accidental dots/spaces)
-    let folderId = (process.env.GOOGLE_DRIVE_FOLDER_ID || '').trim();
-    if (folderId.includes('/folders/')) {
-      folderId = folderId.split('/folders/')[1].split('?')[0].split('/')[0];
-    }
-    folderId = folderId.replace(/[./]+$/, ''); // Remove trailing dots or slashes
+    // POWERFUL ID EXTRACTION: Handles raw IDs, full URLs, and mobile share links
+    const rawInput = (process.env.GOOGLE_DRIVE_FOLDER_ID || '').trim();
+    const idMatch = rawInput.match(/([a-zA-Z0-9_-]{25,})($|[/?&])/);
+    const folderId = idMatch ? idMatch[1] : rawInput;
 
-    console.log(`Uploading ${fileName} to Drive Folder: ${folderId}`);
+    console.log(`Uploading to Drive ID: ${folderId}`);
 
     let fileStream;
     if (Buffer.isBuffer(fileSource)) {
@@ -54,26 +52,20 @@ async function uploadToDrive(fileSource, fileName, mimeType) {
         mimeType: mimeType,
         body: fileStream,
       },
+      // Important flags for complex sharing environments
+      supportsAllDrives: true,
+      fields: 'id, webViewLink'
     });
 
     const fileId = response.data.id;
 
-    // Make file public or shared (Optional, depends on how you want to view them)
+    // Grant permission so the link is viewable in the app
     await drive.permissions.create({
       fileId: fileId,
-      requestBody: {
-        role: 'reader',
-        type: 'anyone',
-      },
+      requestBody: { role: 'reader', type: 'anyone' },
+      supportsAllDrives: true,
     });
 
-    // Get the web link
-    const result = await drive.files.get({
-      fileId: fileId,
-      fields: 'webViewLink, webContentLink, thumbnailLink',
-    });
-
-    // We return a direct download link which works better for <img> tags
     return `https://drive.google.com/uc?export=view&id=${fileId}`;
   } catch (error) {
     console.error('Drive Upload Error:', error);
