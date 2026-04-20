@@ -88,7 +88,11 @@ router.post('/', protect, upload.fields([
     res.status(201).json(lead);
   } catch (error) {
     console.error('Save Error:', error);
-    res.status(400).json({ message: 'Failed to create lead', details: error.message });
+    let errorMsg = 'Failed to create lead';
+    if (error.message.includes('storage quota')) {
+      errorMsg = 'Google Drive Error: Service Account has no storage space. Please use a Shared Drive (Workspace) or contact support to switch to OAuth2.';
+    }
+    res.status(400).json({ message: errorMsg, details: error.message });
   }
 });
 

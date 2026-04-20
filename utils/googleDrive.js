@@ -28,12 +28,11 @@ async function uploadToDrive(fileSource, fileName, mimeType) {
   if (!drive) throw new Error('Google Drive not configured.');
 
   try {
-    // POWERFUL ID EXTRACTION: Handles raw IDs, full URLs, and mobile share links
     const rawInput = (process.env.GOOGLE_DRIVE_FOLDER_ID || '').trim();
     const idMatch = rawInput.match(/([a-zA-Z0-9_-]{25,})($|[/?&])/);
     const folderId = idMatch ? idMatch[1] : rawInput;
 
-    console.log(`Uploading to Drive ID: ${folderId}`);
+    console.log(`Attempting upload to Drive: ${fileName}`);
 
     let fileStream;
     if (Buffer.isBuffer(fileSource)) {
@@ -52,14 +51,14 @@ async function uploadToDrive(fileSource, fileName, mimeType) {
         mimeType: mimeType,
         body: fileStream,
       },
-      // Important flags for complex sharing environments
+      // Essential for Service Accounts in different environments
       supportsAllDrives: true,
-      fields: 'id, webViewLink'
+      fields: 'id',
     });
 
     const fileId = response.data.id;
 
-    // Grant permission so the link is viewable in the app
+    // Set permission so it's viewable
     await drive.permissions.create({
       fileId: fileId,
       requestBody: { role: 'reader', type: 'anyone' },
@@ -68,7 +67,9 @@ async function uploadToDrive(fileSource, fileName, mimeType) {
 
     return `https://drive.google.com/uc?export=view&id=${fileId}`;
   } catch (error) {
-    console.error('Drive Upload Error:', error);
+    if (error.message.includes('storage quota')) {
+      console.error('CRITICAL: Service Account has no storage space. You must use a Shared Drive or OAuth2.');
+    }
     throw error;
   }
 }
