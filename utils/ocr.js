@@ -64,11 +64,12 @@ async function extractTextAndRotate(imageSource) {
 
 /**
  * Enhanced parsing logic using both raw text and visual coordinates
+ * Specifically optimized for Bangladeshi card layouts (Engr. prefix, multiple addresses)
  */
 function parseCardIntelligence(fullText, detections) {
   if (!fullText) return null;
 
-  console.log('--- STARTING PRECISION HYBRID PARSING ---');
+  console.log('--- STARTING HIGH-PRECISION HYBRID PARSING ---');
   
   const data = {
     companyName: '',
@@ -79,11 +80,11 @@ function parseCardIntelligence(fullText, detections) {
     addresses: []
   };
 
-  // 1. Precise Emails (from full text)
+  // 1. Precise Emails (CRITICAL: Strictly exclude from other fields)
   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
   data.emails = [...new Set((fullText.match(emailRegex) || []).map(e => e.toLowerCase()))];
 
-  // 2. Precise Phones (from full text)
+  // 2. Precise Phones
   const phoneRegex = /(?:\+|00)?(?:\d[.\s-]?){7,15}/g;
   data.phoneNumbers = [...new Set((fullText.match(phoneRegex) || []).filter(p => {
     const d = p.replace(/\D/g, '');
@@ -94,80 +95,98 @@ function parseCardIntelligence(fullText, detections) {
   const fragments = (detections || []).slice(1);
   let visualLines = [];
   fragments.forEach(f => {
-    const y = f.boundingPoly.vertices[0].y || 0;
-    const h = (f.boundingPoly.vertices[2].y || 0) - y;
+    const v = f.boundingPoly.vertices;
+    const y = v[0].y || 0;
+    const x = v[0].x || 0;
+    const h = (v[2].y || 0) - y;
     const text = f.description.trim();
-    if (text.length < 1 || /^[\W_]+$/.test(text)) return; // Filter noise like ") . ,"
+    
+    // Noise filter: skip single symbols or fragments that are just punctuation
+    if (text.length <= 1 && !/\w/.test(text)) return;
+    if (/^[).,.-]+$/.test(text)) return;
 
-    let line = visualLines.find(l => Math.abs(l.y - y) < 8); // Tight tolerance
+    let line = visualLines.find(l => Math.abs(l.y - y) < 12); // Slightly larger tolerance for mobile shakes
     if (line) {
       line.text += ' ' + text;
       line.height = Math.max(line.height, h);
+      line.minX = Math.min(line.minX, x);
     } else {
-      visualLines.push({ text, y, height: h });
+      visualLines.push({ text, y, height: h, minX: x });
     }
   });
+  
+  // Sort lines top-to-bottom
   visualLines.sort((a, b) => a.y - b.y);
 
   // 3. Designation Identification
-  const designationKeywords = ['Officer', 'Manager', 'Director', 'CEO', 'Founder', 'Engineer', 'Sales', 'Executive', 'Owner', 'Partner', 'President', 'Consultant', 'Proprietor', 'V.P.', 'Chief', 'Lead', 'Associate', 'Representative', 'Prop.'];
+  const designationKeywords = ['Officer', 'Manager', 'Director', 'CEO', 'Founder', 'Engineer', 'Sales', 'Executive', 'Owner', 'Partner', 'President', 'Consultant', 'Proprietor', 'V.P.', 'Chief', 'Lead', 'Associate', 'Representative', 'Prop.', 'MD', 'Chairman'];
   
   let desigLineIdx = -1;
   for (let i = 0; i < visualLines.length; i++) {
-    if (designationKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(visualLines[i].text))) {
-      data.designation = visualLines[i].text;
-      desigLineIdx = i;
-      break;
+    const l = visualLines[i];
+    if (designationKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(l.text))) {
+      // Ensure it's not a company name with "Officer" in it (rare)
+      if (!l.text.includes('LTD') && !l.text.includes('PVT')) {
+        data.designation = l.text;
+        desigLineIdx = i;
+        break;
+      }
     }
   }
 
-  // 4. Contact Person Name
-  // Logic: Not a designation, not an email, not too long, usually above designation
-  const isDesignation = (txt) => designationKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(txt));
-  
+  // 4. Contact Person Name Identification
+  // Heuristic: Above designation, or short line with Name Prefixes (Engr., Mr., Md.)
+  const namePrefixes = ['Engr.', 'Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Md.', 'Mohammad'];
+  const isName = (txt) => {
+    if (namePrefixes.some(p => txt.includes(p))) return true;
+    const words = txt.split(' ').length;
+    return words >= 2 && words <= 5 && !/\d/.test(txt) && !txt.includes('@') && !txt.includes('.com');
+  };
+
   if (desigLineIdx > 0) {
-    const above = visualLines[desigLineIdx - 1].text;
-    if (!isDesignation(above) && !above.includes('@') && above.length < 35 && !/\d{5,}/.test(above)) {
-      data.contactPersonName = above;
-    }
+    const candidate = visualLines[desigLineIdx - 1].text;
+    if (isName(candidate)) data.contactPersonName = candidate;
   }
 
   if (!data.contactPersonName) {
-    const potential = visualLines.find(l => {
-      const words = l.text.split(' ').length;
-      return words >= 2 && words <= 4 && !/\d/.test(l.text) && !l.text.includes('@') && !isDesignation(l.text);
-    });
+    const potential = visualLines.find(l => isName(l.text) && !designationKeywords.some(k => l.text.toLowerCase().includes(k.toLowerCase())));
     if (potential) data.contactPersonName = potential.text;
   }
 
   // 5. Company Name Identification
-  const corpSuffixes = ['Ltd', 'Limited', 'Pvt', 'Inc', 'Corp', 'Group', 'Industries', 'Solutions', 'Associates', 'Trading', 'Contractors', 'Agency', 'Co.', 'Works'];
+  const corpSuffixes = ['Ltd', 'Limited', 'Pvt', 'Inc', 'Corp', 'Group', 'Industries', 'Solutions', 'Associates', 'Trading', 'Contractors', 'Agency', 'Co.', 'Works', 'Marine', 'Equipments'];
   
-  const suffixLine = visualLines.find(l => corpSuffixes.some(s => new RegExp(`\\b${s}\\b`, 'i').test(l.text)));
+  // First look for suffix
+  const suffixLine = visualLines.find(l => corpSuffixes.some(s => new RegExp(`\\b${s}\\b`, 'i').test(l.text)) && !l.text.includes('@'));
+  
   if (suffixLine) {
     data.companyName = suffixLine.text;
   } else {
-    // Largest font that isn't name/designation/email/address
+    // Tallest prominent line at the top or center that isn't name/email
     const tallest = [...visualLines].sort((a, b) => b.height - a.height).find(l => 
       l.text !== data.contactPersonName && 
       l.text !== data.designation && 
       !l.text.includes('@') && 
-      !/\d{7,}/.test(l.text) &&
-      !/Dhaka|Road|Street|Plot|Office/i.test(l.text)
+      !/\d{5,}/.test(l.text) &&
+      l.text.length > 3
     );
     if (tallest) data.companyName = tallest.text;
   }
 
-  // 6. Address Segmentation (Gap + Keyword based)
+  // 6. ADVANCD MULTI-ADDRESS EXTRACTION (Spatial & Keyword)
   const pinRegex = /\b\d{4,6}\b/;
-  const cityKeywords = ['Dhaka', 'Chittagong', 'Khulna', 'Sylhet', 'Rajshahi', 'Mumbai', 'Delhi', 'Dubai'];
+  const addressMarkers = ['Plot', 'Shop', 'Unit', 'Office', 'Road', 'Street', 'Floor', 'Dhaka', 'Chittagong', 'Factory', 'Branch', 'Mansion', 'Building', 'Lane', 'Dewanhat', 'Mooring', 'Bangladesh'];
 
-  const addressLines = visualLines.filter(l => 
-    l.text !== data.companyName && l.text !== data.contactPersonName && l.text !== data.designation &&
-    !data.emails.some(e => l.text.toLowerCase().includes(e)) && 
-    !data.phoneNumbers.some(p => l.text.includes(p)) &&
-    (l.text.includes(',') || pinRegex.test(l.text) || /Plot|Unit|Office|Road|Street|Floor|Dhaka|Factory|Branch/i.test(l.text))
-  );
+  // Filter lines that look like addresses
+  const addressLines = visualLines.filter(l => {
+    const t = l.text;
+    if (t === data.companyName || t === data.contactPersonName || t === data.designation) return false;
+    if (data.emails.some(e => t.toLowerCase().includes(e))) return false;
+    if (data.phoneNumbers.some(p => t.includes(p))) return false;
+    if (t.toLowerCase().includes('www.')) return false;
+    
+    return t.includes(',') || pinRegex.test(t) || addressMarkers.some(m => t.toLowerCase().includes(m.toLowerCase()));
+  });
 
   if (addressLines.length > 0) {
     let currentBlock = [];
@@ -175,9 +194,13 @@ function parseCardIntelligence(fullText, detections) {
       let isNewBlock = false;
       if (idx > 0) {
         const prev = addressLines[idx - 1];
-        const verticalGap = l.y - (prev.y + prev.height);
-        // If vertical gap is large (> 2.5x height), it's a new location
-        if (verticalGap > (prev.height * 2.5) || /Office|Branch|Factory|Head Office|Works/i.test(l.text)) {
+        const vGap = l.y - (prev.y + prev.height);
+        
+        // Split if:
+        // 1. Large vertical gap (> 30px or 3x line height)
+        // 2. Keyword trigger (Office, Factory)
+        // 3. New PIN code pattern starting a line
+        if (vGap > 30 || vGap > (prev.height * 2.5) || /Office|Branch|Factory|Head Office|Works|110|Strand/i.test(l.text)) {
           isNewBlock = true;
         }
       }
@@ -192,17 +215,18 @@ function parseCardIntelligence(fullText, detections) {
     if (currentBlock.length > 0) data.addresses.push({ street: currentBlock.join(', '), area: '', city: '' });
   }
 
-  // Final Cleanup: Try to extract city from street string
+  // 7. City Extraction & Final Polish
+  const cities = ['Dhaka', 'Chittagong', 'Chattogram', 'Khulna', 'Sylhet', 'Rajshahi'];
   data.addresses = data.addresses.map(addr => {
-    const streetTxt = addr.street;
     let city = '';
-    const cityMatch = cityKeywords.find(c => new RegExp(`\\b${c}\\b`, 'i').test(streetTxt));
+    const cityMatch = cities.find(c => new RegExp(`\\b${c}\\b`, 'i').test(addr.street));
     if (cityMatch) city = cityMatch;
-    else {
-      const parts = streetTxt.split(/[,\s-]/).filter(p => p.length > 3 && !/\d/.test(p));
-      if (parts.length > 0) city = parts[parts.length - 1];
-    }
-    return { ...addr, city };
+    
+    // Remove phone fragments accidentally merged into address
+    let cleanStreet = addr.street;
+    data.phoneNumbers.forEach(p => cleanStreet = cleanStreet.replace(p, '').trim());
+    
+    return { ...addr, street: cleanStreet.replace(/^[,\s]+|[,\s]+$/g, ''), city };
   });
 
   if (data.addresses.length === 0) data.addresses = [{ street: '', area: '', city: '' }];
