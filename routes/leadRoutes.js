@@ -160,4 +160,48 @@ router.put('/status/company', protect, async (req, res) => {
   }
 });
 
+// @desc    Share a lead with other users
+// @route   POST /api/leads/:id/share
+router.post('/:id/share', protect, async (req, res) => {
+  const { userIds } = req.body;
+  try {
+    const lead = await Lead.findById(req.params.id);
+    if (!lead) return res.status(404).json({ message: 'Lead not found' });
+
+    const newShares = userIds.map(uid => ({
+      sharedWith: uid,
+      sharedBy: req.user._id,
+      sharedAt: Date.now()
+    }));
+
+    // Filter out users already shared with to prevent duplicates
+    const existingSharedWith = lead.shares.map(s => s.sharedWith.toString());
+    const uniqueNewShares = newShares.filter(ns => !existingSharedWith.includes(ns.sharedWith));
+
+    lead.shares.push(...uniqueNewShares);
+    await lead.save();
+
+    res.json({ message: 'Lead shared successfully', count: uniqueNewShares.length });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// @desc    Get leads shared with the current user
+// @route   GET /api/leads/shared
+router.get('/shared-with-me', protect, async (req, res) => {
+  try {
+    const leads = await Lead.find({
+      'shares.sharedWith': req.user._id
+    })
+    .populate('enteredBy', 'name phone')
+    .populate('shares.sharedBy', 'name phone')
+    .sort('-createdAt');
+    
+    res.json(leads);
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 module.exports = router;

@@ -35,6 +35,11 @@ const leadSchema = new mongoose.Schema({
 
   // Tracking
   enteredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  shares: [{
+    sharedWith: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    sharedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    sharedAt: { type: Date, default: Date.now }
+  }],
 }, { timestamps: true });
 
 // Serialized and sorted by entried date is handled by Mongoose timestamps 'createdAt'
