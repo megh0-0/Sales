@@ -24,15 +24,29 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
       }
     }
 
-    // Merge results
+    // Intelligence-based merging
     const mergedData = {
-      companyName: results.find(r => r.companyName)?.companyName || '',
-      contactPersonName: results.find(r => r.contactPersonName)?.contactPersonName || '',
-      designation: results.find(r => r.designation)?.designation || '',
+      companyName: '',
+      contactPersonName: '',
+      designation: '',
       phoneNumbers: [...new Set(results.flatMap(r => r.phoneNumbers))],
       emails: [...new Set(results.flatMap(r => r.emails))],
       addresses: results.flatMap(r => r.addresses).filter(a => a.street.length > 5)
     };
+
+    // Merge Company: Prioritize lines with actual corporate suffixes (LTD, PVT)
+    const allCompanies = results.map(r => r.companyName).filter(c => c);
+    const bestCompany = allCompanies.find(c => /Ltd|Limited|Pvt|Inc|Corp/i.test(c));
+    mergedData.companyName = bestCompany || allCompanies[0] || '';
+
+    // Merge Name: Prioritize lines with prefixes (Engr., Md.)
+    const allNames = results.map(r => r.contactPersonName).filter(n => n);
+    const bestName = allNames.find(n => /Engr\.|Md\.|Mr\.|Mohammad/i.test(n));
+    mergedData.contactPersonName = bestName || allNames[0] || '';
+
+    // Merge Designation
+    const allDesigs = results.map(r => r.designation).filter(d => d);
+    mergedData.designation = allDesigs[0] || '';
 
     if (mergedData.addresses.length === 0) {
       mergedData.addresses = [{ street: '', area: '', city: '' }];

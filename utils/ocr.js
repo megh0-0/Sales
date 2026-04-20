@@ -20,7 +20,7 @@ async function extractTextAndRotate(imageSource) {
       rawBuffer = fs.readFileSync(imageSource);
     }
 
-    // Resize for memory efficiency
+    // Rotate from EXIF then resize
     rawBuffer = await sharp(rawBuffer).rotate().resize(1200, 1200, { fit: 'inside', withoutEnlargement: true }).toBuffer();
     const base64Image = rawBuffer.toString('base64');
 
@@ -76,12 +76,11 @@ function getCleanLines(fullText) {
 
 /**
  * Intelligent parser optimized for Bangladeshi business cards.
- * Uses the high-quality fullText reading order provided by Google Vision.
  */
 function parseCardIntelligence(fullText, detections) {
   if (!fullText) return null;
 
-  console.log('--- STARTING HIGH-PRECISION TEXT-ORDER PARSING ---');
+  console.log('--- STARTING PRECISION PARSING ---');
   
   const rawLines = getCleanLines(fullText);
   const data = {
@@ -103,7 +102,6 @@ function parseCardIntelligence(fullText, detections) {
     return d.length >= 8 && d.length <= 13;
   }).map(p => p.trim()))];
 
-  // Filter lines to remove exact matches of emails and phones to avoid cluttering other fields
   const filteredLines = rawLines.filter(l => 
     !data.emails.includes(l.toLowerCase()) && 
     !data.phoneNumbers.some(p => l.includes(p)) &&
@@ -112,55 +110,65 @@ function parseCardIntelligence(fullText, detections) {
   );
 
   // 2. Identify Designation (using keywords)
-  const desigKeywords = ['Officer', 'Manager', 'Director', 'CEO', 'Founder', 'Engineer', 'Sales', 'Executive', 'Owner', 'Partner', 'President', 'Consultant', 'Proprietor', 'V.P.', 'Chief', 'Lead', 'Associate', 'Representative', 'Prop.', 'MD', 'Chairman'];
+  // CRITICAL: "Engineer" and "MD" are often names/titles in BD, so we use specific patterns
+  const desigKeywords = ['Officer', 'Manager', 'Director', 'CEO', 'Founder', 'Sales', 'Executive', 'Owner', 'Partner', 'President', 'Consultant', 'Proprietor', 'V.P.', 'Chief', 'Lead', 'Associate', 'Representative', 'Prop.', 'Chairman', 'Technician'];
   
   let desigIdx = -1;
   for (let i = 0; i < filteredLines.length; i++) {
-    if (desigKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(filteredLines[i]))) {
-      data.designation = filteredLines[i];
-      desigIdx = i;
-      break;
+    const line = filteredLines[i];
+    // Check if line IS exactly a designation or contains it as a distinct word
+    if (desigKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(line))) {
+      // Avoid lines that look like Names (with Md. or Engr. or too many words)
+      if (!/Md\.|Engr\.|Mohammad/i.test(line)) {
+        data.designation = line;
+        desigIdx = i;
+        break;
+      }
     }
   }
 
   // 3. Identify Contact Person Name
-  // Priority 1: Line above designation if it looks like a name
-  const namePrefixes = ['Engr.', 'Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Md.', 'Mohammad'];
+  const namePrefixes = ['Engr.', 'Md.', 'Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Mohammad'];
   
-  if (desigIdx > 0) {
+  // Look for line with prefix first
+  const prefixMatch = filteredLines.find(l => namePrefixes.some(p => l.includes(p)));
+  if (prefixMatch) {
+    data.contactPersonName = prefixMatch;
+  } else if (desigIdx > 0) {
+    // If no prefix, check line above designation
     const above = filteredLines[desigIdx - 1];
-    const isDesig = desigKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(above));
-    if (!isDesig && above.length < 35) {
+    if (above.length < 35 && above.split(' ').length >= 2) {
       data.contactPersonName = above;
     }
   }
 
-  // Priority 2: Any line starting with a name prefix
-  if (!data.contactPersonName) {
-    const prefixMatch = filteredLines.find(l => namePrefixes.some(p => l.includes(p)));
-    if (prefixMatch) data.contactPersonName = prefixMatch;
-  }
-
   // 4. Identify Company Name
-  const corpSuffixes = ['Ltd', 'Limited', 'Pvt', 'Inc', 'Corp', 'Group', 'Industries', 'Solutions', 'Associates', 'Trading', 'Contractors', 'Agency', 'Co.', 'Equipments', 'Marine'];
+  const corpSuffixes = ['Ltd', 'Limited', 'Pvt', 'Inc', 'Corp', 'Group', 'Industries', 'Solutions', 'Associates', 'Trading', 'Contractors', 'Agency', 'Co.', 'Equipments', 'Marine', 'Automation'];
   
-  // Look for corporate suffix in lines that aren't Name/Designation
-  const suffixMatch = filteredLines.find(l => 
+  // Look for line with suffix, prioritize longer ones (actual company vs brand)
+  const potentialCompanies = filteredLines.filter(l => 
     l !== data.contactPersonName && 
     l !== data.designation && 
     corpSuffixes.some(s => new RegExp(`\\b${s}\\b`, 'i').test(l))
   );
 
-  if (suffixMatch) {
-    data.companyName = suffixMatch;
+  if (potentialCompanies.length > 0) {
+    // Pick the longest line with a suffix
+    data.companyName = potentialCompanies.sort((a, b) => b.length - a.length)[0];
   } else {
-    // If no suffix, take the first line that isn't Name/Designation
-    const firstGood = filteredLines.find(l => l !== data.contactPersonName && l !== data.designation && l.length > 3);
+    // Fallback: take first line that isn't Name/Designation/Address-looking
+    const firstGood = filteredLines.find(l => 
+      l !== data.contactPersonName && 
+      l !== data.designation && 
+      l.length > 3 &&
+      !l.includes(',') &&
+      !/\d{4}/.test(l)
+    );
     data.companyName = firstGood || '';
   }
 
   // 5. Multi-Address Extraction
-  const addrMarkers = ['Plot', 'Shop', 'Unit', 'Office', 'Factory', 'Building', 'No.', 'H.O.', 'B.O.', 'Mansion', 'Lane', 'Dewanhat', 'Mooring', 'Dhaka', 'Chattogram', 'Bangladesh'];
+  const addrMarkers = ['Plot', 'Shop', 'Unit', 'Office', 'Factory', 'Building', 'No.', 'H.O.', 'B.O.', 'Mansion', 'Lane', 'Dewanhat', 'Mooring', 'Dhaka', 'Chattogram', 'Bangladesh', 'Strand', 'Road', 'Floor'];
   const pinRegex = /\b\d{4,6}\b/;
 
   const addressLines = filteredLines.filter(l => 
@@ -173,15 +181,10 @@ function parseCardIntelligence(fullText, detections) {
     let current = [];
     
     addressLines.forEach((line, idx) => {
-      // Logic for new address:
-      // 1. Line contains explicit "Office", "Branch", "Factory"
-      // 2. Previous line was a 4-digit code (Bangladesh PIN usually ends an address)
-      // 3. Current line starts with a number like "110, " which often indicates a new street address
-      const isNewOffice = /Office|Branch|Factory|Head Office|Works/i.test(line);
-      const isNewStreet = /^\d{2,}/.test(line);
+      const isNewOffice = /Office|Branch|Factory|Head Office|Works|110|Strand/i.test(line);
       const prevEnded = idx > 0 && pinRegex.test(addressLines[idx - 1]);
 
-      if ((isNewOffice || isNewStreet || prevEnded) && current.length > 0) {
+      if ((isNewOffice || prevEnded) && current.length > 0) {
         blocks.push(current.join(', '));
         current = [line];
       } else {
@@ -195,14 +198,13 @@ function parseCardIntelligence(fullText, detections) {
       const cities = ['Dhaka', 'Chittagong', 'Chattogram', 'Khulna', 'Sylhet', 'Rajshahi'];
       const cityMatch = cities.find(c => new RegExp(`\\b${c}\\b`, 'i').test(b));
       if (cityMatch) city = cityMatch;
-
       return { street: b, area: '', city: city };
     });
   }
 
   if (data.addresses.length === 0) data.addresses = [{ street: '', area: '', city: '' }];
 
-  console.log('--- FINAL POLISHED DATA ---');
+  console.log('--- PARSING RESULT ---');
   console.log(JSON.stringify(data, null, 2));
   return data;
 }
