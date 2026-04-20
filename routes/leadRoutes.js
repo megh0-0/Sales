@@ -3,7 +3,7 @@ const router = express.Router();
 const Lead = require('../models/Lead');
 const { protect } = require('../middleware/auth');
 const { upload } = require('../middleware/upload');
-const { extractTextAndRotate, parseCardText } = require('../utils/ocr');
+const { extractTextAndRotate, parseCardVisual } = require('../utils/ocr');
 const { uploadToDrive } = require('../utils/googleDrive');
 
 // @desc    OCR for visiting cards
@@ -12,21 +12,19 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
   if (!req.files || req.files.length === 0) return res.status(400).json({ message: 'No images uploaded' });
 
   try {
-    let combinedText = '';
     const results = [];
     const rotatedImages = [];
 
     for (const file of req.files) {
-      // Use the buffer directly from memory storage
-      const { text, rotatedImage } = await extractTextAndRotate(file.buffer);
-      combinedText += '\n' + text;
-      results.push(parseCardText(text));
+      const { detections, rotatedImage } = await extractTextAndRotate(file.buffer);
+      results.push(parseCardVisual(detections));
       
       if (rotatedImage) {
         rotatedImages.push(`data:image/jpeg;base64,${rotatedImage.toString('base64')}`);
       }
     }
 
+    // Merge results
     const mergedData = {
       companyName: results.find(r => r.companyName)?.companyName || '',
       contactPersonName: results.find(r => r.contactPersonName)?.contactPersonName || '',
@@ -40,7 +38,7 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
       mergedData.addresses = [{ street: '', area: '', city: '' }];
     }
     
-    res.json({ text: combinedText, parsedData: mergedData, rotatedImages });
+    res.json({ parsedData: mergedData, rotatedImages });
   } catch (error) {
     console.error('OCR Error:', error);
     res.status(500).json({ message: 'OCR failed', details: error.message });
