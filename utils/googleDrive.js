@@ -28,6 +28,15 @@ async function uploadToDrive(fileSource, fileName, mimeType) {
   if (!drive) throw new Error('Google Drive not configured.');
 
   try {
+    // Sanitize Folder ID (handle full URL or accidental dots/spaces)
+    let folderId = (process.env.GOOGLE_DRIVE_FOLDER_ID || '').trim();
+    if (folderId.includes('/folders/')) {
+      folderId = folderId.split('/folders/')[1].split('?')[0].split('/')[0];
+    }
+    folderId = folderId.replace(/[./]+$/, ''); // Remove trailing dots or slashes
+
+    console.log(`Uploading ${fileName} to Drive Folder: ${folderId}`);
+
     let fileStream;
     if (Buffer.isBuffer(fileSource)) {
       fileStream = new stream.PassThrough();
@@ -39,7 +48,7 @@ async function uploadToDrive(fileSource, fileName, mimeType) {
     const response = await drive.files.create({
       requestBody: {
         name: fileName,
-        parents: [process.env.GOOGLE_DRIVE_FOLDER_ID], // Optional: Upload to specific folder
+        parents: [folderId],
       },
       media: {
         mimeType: mimeType,
