@@ -126,39 +126,54 @@ function parseCardText(text) {
     data.companyName = lines[0] === data.contactPersonName ? (lines[1] || '') : lines[0];
   }
 
-  // 5. Multi-Address Extraction
-  const addressKeywords = ['Street', 'Road', 'Ave', 'Blvd', 'Lane', 'Floor', 'Building', 'Plot', 'Phase', 'Industrial', 'Sector', 'Opp', 'Near', 'Area', 'City', 'Office', 'Factory', 'Unit', 'H.O.', 'B.O.'];
+  // 5. Multi-Address Extraction (Refined)
+  const addressStartKeywords = ['Plot', 'Shop', 'Unit', 'Office', 'Factory', 'Building', 'No.', 'H.O.', 'B.O.', 'Head Office', 'Branch Office', 'Works:'];
   const pinRegex = /\b\d{5,6}\b/;
 
-  // Find all lines that look like parts of an address
+  // Collect potential lines, excluding already identified fields
   const potentialAddrLines = lines.filter(l => 
-    (addressKeywords.some(k => new RegExp(k, 'i').test(l)) || pinRegex.test(l)) &&
     !data.emails.includes(l.toLowerCase()) &&
     !data.phoneNumbers.includes(l) &&
     l !== data.companyName &&
     l !== data.contactPersonName &&
-    l !== data.designation
+    l !== data.designation &&
+    (l.length > 5 || pinRegex.test(l))
   );
 
   if (potentialAddrLines.length > 0) {
-    // Try to group lines into distinct addresses
-    // Heuristic: If we see a new "PIN code" or "Office/Factory" keyword, it's likely a new address
     let currentAddr = [];
     potentialAddrLines.forEach((line, idx) => {
-      const isNewBlock = (idx > 0 && (pinRegex.test(line) || /Office|Factory|H\.O\.|B\.O\.|Branch|Head/i.test(line)));
+      // Logic for starting a new address block:
+      // 1. Line starts with a known "Start Keyword"
+      // 2. Previous line had a PIN code (addresses usually end with PIN)
+      // 3. Current line is significantly separate from the previous one in the array
+      const startsWithKeyword = addressStartKeywords.some(k => new RegExp(`^${k}`, 'i').test(line));
+      const prevHadPin = idx > 0 && pinRegex.test(potentialAddrLines[idx - 1]);
       
-      if (isNewBlock && currentAddr.length > 0) {
+      if ((startsWithKeyword || prevHadPin) && currentAddr.length > 0) {
         data.addresses.push({ street: currentAddr.join(', '), area: '', city: '' });
         currentAddr = [line];
       } else {
         currentAddr.push(line);
       }
     });
-    // Push the last one
     if (currentAddr.length > 0) {
       data.addresses.push({ street: currentAddr.join(', '), area: '', city: '' });
     }
   }
+
+  // Deduplicate and clean addresses
+  data.addresses = data.addresses
+    .filter(a => a.street.length > 10) // Filter out noise
+    .map(a => {
+      // Try to extract city (last word before PIN or last word of line)
+      const pinMatch = a.street.match(pinRegex);
+      if (pinMatch) {
+        const parts = a.street.split(pinMatch[0])[0].split(/[,\s-]/).filter(p => p.length > 2);
+        if (parts.length > 0) a.city = parts[parts.length - 1];
+      }
+      return a;
+    });
 
   // Fallback: If no addresses found, ensure at least one empty object
   if (data.addresses.length === 0) {

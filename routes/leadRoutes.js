@@ -116,6 +116,22 @@ router.put('/:id', protect, async (req, res) => {
   }
 });
 
+// @desc    Update status for all leads of a company
+// @route   PUT /api/leads/status/company
+router.put('/status/company', protect, async (req, res) => {
+  const { companyName, status } = req.body;
+  try {
+    const query = { companyName };
+    if (req.user.role === 'Employee') {
+      query.enteredBy = req.user._id;
+    }
+    await Lead.updateMany(query, { status });
+    res.json({ message: 'Status updated for all company leads' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // @desc    Get report data (Daily, Weekly, Monthly)
 // @route   GET /api/leads/reports
 router.get('/reports', protect, async (req, res) => {
