@@ -34,19 +34,29 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
       addresses: results.flatMap(r => r.addresses).filter(a => a.street.length > 5)
     };
 
-    // Merge Company: Prioritize lines with actual corporate suffixes (LTD, PVT)
+    const desigKeywords = ['Officer', 'Manager', 'Director', 'CEO', 'Founder', 'Sales', 'Executive', 'Owner', 'Partner', 'President', 'Consultant', 'Proprietor', 'V.P.', 'Chief', 'Lead', 'Associate', 'Representative', 'Prop.', 'Chairman', 'Technician'];
+    const namePrefixes = ['Engr.', 'Md.', 'Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Mohammad', 'S.M.', 'Sheikh'];
+
+    // 1. Merge Company: Strongly prioritize lines with actual corporate suffixes
     const allCompanies = results.map(r => r.companyName).filter(c => c);
     const bestCompany = allCompanies.find(c => /Ltd|Limited|Pvt|Inc|Corp/i.test(c));
-    mergedData.companyName = bestCompany || allCompanies[0] || '';
+    // Filter out potential designations or names from company field
+    const cleanCompanies = allCompanies.filter(c => 
+      !desigKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(c)) &&
+      !namePrefixes.some(p => c.includes(p))
+    );
+    mergedData.companyName = bestCompany || cleanCompanies[0] || allCompanies[0] || '';
 
-    // Merge Name: Prioritize lines with prefixes (Engr., Md.)
+    // 2. Merge Name: Prioritize lines with prefixes (Engr., Md.)
     const allNames = results.map(r => r.contactPersonName).filter(n => n);
-    const bestName = allNames.find(n => /Engr\.|Md\.|Mr\.|Mohammad/i.test(n));
-    mergedData.contactPersonName = bestName || allNames[0] || '';
+    const bestName = allNames.find(n => namePrefixes.some(p => n.includes(p)));
+    // Filter out potential designations from name field
+    const cleanNames = allNames.filter(n => !desigKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(n)));
+    mergedData.contactPersonName = bestName || cleanNames[0] || allNames[0] || '';
 
-    // Merge Designation
+    // 3. Merge Designation: Find the one that actually looks like a job title
     const allDesigs = results.map(r => r.designation).filter(d => d);
-    mergedData.designation = allDesigs[0] || '';
+    mergedData.designation = allDesigs.find(d => desigKeywords.some(k => new RegExp(`\\b${k}\\b`, 'i').test(d))) || allDesigs[0] || '';
 
     if (mergedData.addresses.length === 0) {
       mergedData.addresses = [{ street: '', area: '', city: '' }];
