@@ -61,10 +61,11 @@ async function uploadToDrive(fileSource, fileName, mimeType) {
     // Get the web link
     const result = await drive.files.get({
       fileId: fileId,
-      fields: 'webViewLink, webContentLink',
+      fields: 'webViewLink, webContentLink, thumbnailLink',
     });
 
-    return result.data.webViewLink;
+    // We return a direct download link which works better for <img> tags
+    return `https://drive.google.com/uc?export=view&id=${fileId}`;
   } catch (error) {
     console.error('Drive Upload Error:', error);
     throw error;
