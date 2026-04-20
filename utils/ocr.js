@@ -83,11 +83,12 @@ async function extractTextAndCrop(imageSource) {
 }
 
 /**
- * Improved parser to extract fields from visiting card text
+ * Intelligent parser to extract fields from visiting card text, 
+ * specifically optimized for multiple addresses and phone numbers.
  * @param {string} text 
  */
 function parseCardText(text) {
-  console.log('Parsing extracted text with multi-field heuristics...');
+  console.log('--- STARTING REFINED PARSING ---');
   const lines = text.split('\n').map(l => l.trim()).filter(l => l);
   const data = {
     companyName: '',
@@ -98,19 +99,27 @@ function parseCardText(text) {
     addresses: []
   };
 
+  // 1. Precise Email Extraction
   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
   const foundEmails = text.match(emailRegex);
-  if (foundEmails) data.emails = [...new Set(foundEmails.map(e => e.toLowerCase()))];
+  if (foundEmails) {
+    data.emails = [...new Set(foundEmails.map(e => e.toLowerCase()))];
+    console.log('Emails found:', data.emails);
+  }
 
+  // 2. Precise Phone Extraction (Filtering out addresses)
   const phoneRegex = /(?:\+|00)?(?:\d[.\s-]?){7,15}/g;
   const foundPhones = text.match(phoneRegex);
   if (foundPhones) {
     data.phoneNumbers = [...new Set(foundPhones.map(p => p.trim()).filter(p => {
       const digits = p.replace(/\D/g, '');
-      return digits.length >= 7 && digits.length <= 13;
+      // Business card phones are typically 10-12 digits. PIN codes are 6.
+      return digits.length >= 8 && digits.length <= 13;
     }))];
+    console.log('Phones found:', data.phoneNumbers);
   }
 
+  // 3. Designation & Name Identification
   const designationKeywords = ['Manager', 'Director', 'CEO', 'Founder', 'Engineer', 'Sales', 'Executive', 'Owner', 'Partner', 'Head', 'Associate', 'President', 'Consultant', 'Proprietor', 'V.P.', 'Vice President', 'Chief', 'Lead', 'Prop'];
   let designationIdx = -1;
   for (let i = 0; i < lines.length; i++) {
@@ -124,54 +133,80 @@ function parseCardText(text) {
   if (designationIdx > 0) {
     data.contactPersonName = lines[designationIdx - 1];
   } else {
+    // Fallback: search for a short line without numbers that looks like a name
     const nameLine = lines.find(l => {
       const words = l.split(' ').length;
-      return words >= 2 && words <= 4 && !/\d/.test(l) && !/[@:.]/.test(l);
+      return words >= 2 && words <= 4 && !/\d/.test(l) && !/[@:.]/.test(l) && l.length < 30;
     });
     if (nameLine) data.contactPersonName = nameLine;
   }
 
-  const companySuffixes = ['Limited', 'Ltd', 'Pvt', 'Inc', 'Corp', 'Enterprises', 'Solutions', 'Systems', 'Group', 'Associates', 'Co.'];
+  // 4. Company Name Identification
+  const companySuffixes = ['Limited', 'Ltd', 'Pvt', 'Inc', 'Corp', 'Enterprises', 'Solutions', 'Systems', 'Group', 'Associates', 'Co.', 'Industries', 'Trading', 'Contractors'];
   const suffixLine = lines.find(l => companySuffixes.some(s => new RegExp(`\\b${s}\\b`, 'i').test(l)));
   if (suffixLine) {
     data.companyName = suffixLine;
   } else if (lines.length > 0) {
-    data.companyName = lines[0] === data.contactPersonName ? (lines[1] || '') : lines[0];
+    // If not name, take the first line. If first is name, take second.
+    data.companyName = (lines[0] === data.contactPersonName) ? (lines[1] || '') : lines[0];
   }
 
-  const addressStartKeywords = ['Plot', 'Shop', 'Unit', 'Office', 'Factory', 'Building', 'No.', 'H.O.', 'B.O.', 'Head Office', 'Branch Office', 'Works:'];
+  // 5. SMARTER MULTI-ADDRESS EXTRACTION
+  const addressStartMarkers = ['Plot', 'Shop', 'Unit', 'Office', 'Factory', 'Building', 'No.', 'H.O.', 'B.O.', 'Head Office', 'Branch Office', 'Works:', 'Address:', 'Addr:', 'Site:', 'Regd.'];
   const pinRegex = /\b\d{5,6}\b/;
-  const potentialAddrLines = lines.filter(l => 
-    !data.emails.includes(l.toLowerCase()) && !data.phoneNumbers.includes(l) &&
-    l !== data.companyName && l !== data.contactPersonName && l !== data.designation &&
-    (l.length > 5 || pinRegex.test(l))
-  );
 
-  if (potentialAddrLines.length > 0) {
-    let currentAddr = [];
-    potentialAddrLines.forEach((line, idx) => {
-      const startsWithKeyword = addressStartKeywords.some(k => new RegExp(`^${k}`, 'i').test(line));
-      const prevHadPin = idx > 0 && pinRegex.test(potentialAddrLines[idx - 1]);
-      if ((startsWithKeyword || prevHadPin) && currentAddr.length > 0) {
-        data.addresses.push({ street: currentAddr.join(', '), area: '', city: '' });
-        currentAddr = [line];
-      } else {
-        currentAddr.push(line);
-      }
-    });
-    if (currentAddr.length > 0) data.addresses.push({ street: currentAddr.join(', '), area: '', city: '' });
+  // We iterate through lines and try to "segment" them into address blocks
+  let addressBlocks = [];
+  let currentBlock = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Skip lines that are definitely NOT addresses
+    if (data.emails.includes(line.toLowerCase())) continue;
+    if (data.phoneNumbers.includes(line)) continue;
+    if (line === data.companyName || line === data.contactPersonName || line === data.designation) continue;
+    if (line.toLowerCase().includes('website')) continue;
+    if (line.toLowerCase().startsWith('www.')) continue;
+
+    const startsNewAddress = addressStartMarkers.some(marker => line.toLowerCase().includes(marker.toLowerCase()));
+    const prevWasPin = i > 0 && pinRegex.test(lines[i-1]);
+
+    // If this line starts a new address or follows a PIN, it's a new block
+    if ((startsNewAddress || prevWasPin) && currentBlock.length > 0) {
+      addressBlocks.push(currentBlock.join(', '));
+      currentBlock = [line];
+    } else if (line.length > 5 || pinRegex.test(line)) {
+      currentBlock.push(line);
+    }
+  }
+  // Push the final block
+  if (currentBlock.length > 0) {
+    addressBlocks.push(currentBlock.join(', '));
   }
 
-  data.addresses = data.addresses.filter(a => a.street.length > 10).map(a => {
-    const pinMatch = a.street.match(pinRegex);
-    if (pinMatch) {
-      const parts = a.street.split(pinMatch[0])[0].split(/[,\s-]/).filter(p => p.length > 2);
-      if (parts.length > 0) a.city = parts[parts.length - 1];
-    }
-    return a;
-  });
+  // Clean and filter address blocks
+  data.addresses = addressBlocks
+    .filter(addr => addr.length > 15) // Addresses must be long enough
+    .map(addr => {
+      let city = '';
+      const pinMatch = addr.match(pinRegex);
+      if (pinMatch) {
+        // City is often the word right before the PIN code
+        const beforePin = addr.split(pinMatch[0])[0].trim();
+        const parts = beforePin.split(/[,\s-]/).filter(p => p.length > 2 && !/\d/.test(p));
+        if (parts.length > 0) city = parts[parts.length - 1];
+      }
+      return { street: addr, area: '', city: city };
+    });
 
-  if (data.addresses.length === 0) data.addresses.push({ street: '', area: '', city: '' });
+  // Ensure at least one empty row if none found
+  if (data.addresses.length === 0) {
+    data.addresses.push({ street: '', area: '', city: '' });
+  }
+
+  console.log('--- FINAL PARSED DATA ---');
+  console.log(JSON.stringify(data, null, 2));
   return data;
 }
 
