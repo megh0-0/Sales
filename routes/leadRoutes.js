@@ -86,7 +86,8 @@ router.post('/', protect, upload.fields([
     };
 
     // Create a specific folder for this entry on Google Drive
-    const timestamp = format(new Date(), 'yyyy-MM-dd_HH-mm');
+    const now = new Date();
+    const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}`;
     const folderName = `${leadData.companyName || 'Unknown Company'} - ${leadData.contactPersonName || 'Unknown Person'} (${timestamp})`;
     const entryFolderId = await createDriveFolder(folderName);
 
