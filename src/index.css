@@ -7,8 +7,7 @@
   line-height: 1.5;
   font-weight: 400;
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
+  color-scheme: light;
   background-color: #f9fafb;
 
   font-synthesis: none;
@@ -24,6 +23,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   color: #111827;
+  background-color: #f9fafb;
 }
 
 #root {
@@ -37,6 +37,6 @@ body {
   input[type="password"],
   select,
   textarea {
-    @apply text-gray-900;
+    @apply text-gray-900 bg-white border border-gray-300;
   }
 }

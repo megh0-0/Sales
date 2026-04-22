@@ -105,24 +105,26 @@ const Entry = () => {
         
         setFiles(prev => ({ ...prev, [type === 'front' ? 'visitingCardFront' : 'visitingCardBack']: file }));
         setPreviews(prev => ({ ...prev, [type]: image.webPath! }));
-
-        if (type === 'front') {
-          handleOCR(file);
-        }
       }
     } catch (err) {
       console.error('Camera error:', err);
     }
   };
 
-  const handleOCR = async (file: File) => {
+  const handleOCR = async (filesToProcess: (File | null)[]) => {
+    const validFiles = filesToProcess.filter(f => f !== null) as File[];
+    if (validFiles.length === 0) return;
+
     setOcrLoading(true);
     const formDataOCR = new FormData();
-    formDataOCR.append('image', file);
+    validFiles.forEach(file => {
+      formDataOCR.append('images', file);
+    });
 
     try {
       const res = await axios.post(`${import.meta.env.VITE_API_URL}/leads/ocr`, formDataOCR);
       const parsed = res.data.parsedData;
+      const rotatedImages = res.data.rotatedImages || [];
       
       setFormData(prev => ({
         ...prev,
@@ -131,11 +133,37 @@ const Entry = () => {
         designation: parsed.designation || prev.designation,
         phoneNumbers: parsed.phoneNumbers.length > 0 ? parsed.phoneNumbers : prev.phoneNumbers,
         emails: parsed.emails.length > 0 ? parsed.emails : prev.emails,
-        // Merging addresses can be complex, for now we just take what OCR found if anything
-        addresses: parsed.addresses[0].street ? parsed.addresses : prev.addresses
+        addresses: parsed.addresses.length > 0 ? parsed.addresses : prev.addresses
       }));
-    } catch (err) {
-      console.error('OCR failed');
+
+      // Update previews and files with ROTATED versions
+      if (rotatedImages.length > 0) {
+        setPreviews(prev => {
+          const newPreviews = { ...prev };
+          if (rotatedImages[0]) newPreviews.front = rotatedImages[0];
+          if (rotatedImages[1]) newPreviews.back = rotatedImages[1];
+          return newPreviews;
+        });
+
+        // Convert base64 rotated images back to Files for final lead submission
+        const convertBase64ToFile = async (base64: string, name: string) => {
+          const res = await fetch(base64);
+          const blob = await res.blob();
+          return new File([blob], name, { type: 'image/jpeg' });
+        };
+
+        if (rotatedImages[0]) {
+           const file = await convertBase64ToFile(rotatedImages[0], 'rotated_front.jpg');
+           setFiles(prev => ({ ...prev, visitingCardFront: file }));
+        }
+        if (rotatedImages[1]) {
+           const file = await convertBase64ToFile(rotatedImages[1], 'rotated_back.jpg');
+           setFiles(prev => ({ ...prev, visitingCardBack: file }));
+        }
+      }
+    } catch (err: any) {
+      console.error('OCR failed', err);
+      setError(err.response?.data?.message || 'Autofill failed. Please ensure the card images are clear.');
     } finally {
       setOcrLoading(false);
     }
@@ -230,7 +258,7 @@ const Entry = () => {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="block text-sm font-medium text-gray-700">Front Side Image</label>
-                <div className="relative border-2 border-dashed border-gray-300 rounded-lg p-2 h-40 flex flex-col items-center justify-center overflow-hidden">
+                <div className="relative border-2 border-dashed border-gray-300 rounded-lg p-2 h-40 flex flex-col items-center justify-center overflow-hidden bg-white">
                   {previews.front ? (
                     <img src={previews.front} alt="Front" className="h-full w-full object-contain" />
                   ) : (
@@ -240,13 +268,16 @@ const Entry = () => {
                     </button>
                   )}
                   {previews.front && (
-                    <button type="button" onClick={() => setPreviews(p => ({ ...p, front: '' }))} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1"><X className="w-3 h-3" /></button>
+                    <button type="button" onClick={() => { 
+                      setPreviews(prev => ({ ...prev, front: '' })); 
+                      setFiles(prev => ({ ...prev, visitingCardFront: null })); 
+                    }} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1"><X className="w-3 h-3" /></button>
                   )}
                 </div>
               </div>
               <div className="space-y-2">
                 <label className="block text-sm font-medium text-gray-700">Back Side Image</label>
-                <div className="relative border-2 border-dashed border-gray-300 rounded-lg p-2 h-40 flex flex-col items-center justify-center overflow-hidden">
+                <div className="relative border-2 border-dashed border-gray-300 rounded-lg p-2 h-40 flex flex-col items-center justify-center overflow-hidden bg-white">
                   {previews.back ? (
                     <img src={previews.back} alt="Back" className="h-full w-full object-contain" />
                   ) : (
@@ -256,35 +287,51 @@ const Entry = () => {
                     </button>
                   )}
                   {previews.back && (
-                    <button type="button" onClick={() => setPreviews(p => ({ ...p, back: '' }))} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1"><X className="w-3 h-3" /></button>
+                    <button type="button" onClick={() => { 
+                      setPreviews(prev => ({ ...prev, back: '' })); 
+                      setFiles(prev => ({ ...prev, visitingCardBack: null })); 
+                    }} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1"><X className="w-3 h-3" /></button>
                   )}
                 </div>
               </div>
             </div>
 
+            {/* Autofill Button */}
+            <div className="flex justify-center">
+              <button
+                type="button"
+                disabled={(!files.visitingCardFront && !files.visitingCardBack) || ocrLoading}
+                onClick={() => handleOCR([files.visitingCardFront, files.visitingCardBack])}
+                className="inline-flex items-center px-4 py-2 border border-blue-600 text-blue-600 text-sm font-medium rounded-md hover:bg-blue-50 disabled:opacity-50 disabled:border-gray-300 disabled:text-gray-300 transition-colors"
+              >
+                {ocrLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                Autofill Details from Card
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="col-span-1">
                 <label className="block text-sm font-medium text-gray-700">Company Name</label>
-                <input type="text" name="companyName" required value={formData.companyName} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+                <input type="text" name="companyName" required value={formData.companyName} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white" />
               </div>
               <div className="col-span-1">
                 <label className="block text-sm font-medium text-gray-700">Contact Person Name</label>
-                <input type="text" name="contactPersonName" required value={formData.contactPersonName} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+                <input type="text" name="contactPersonName" required value={formData.contactPersonName} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white" />
               </div>
               <div className="col-span-1">
                 <label className="block text-sm font-medium text-gray-700">Designation</label>
-                <input type="text" name="designation" value={formData.designation} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+                <input type="text" name="designation" value={formData.designation} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white" />
               </div>
               <div className="col-span-1">
                 <label className="block text-sm font-medium text-gray-700">Industry</label>
-                <select name="industry" value={formData.industry} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                <select name="industry" value={formData.industry} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white">
                   <option value="">Select Industry</option>
                   {industries.map(ind => <option key={ind._id} value={ind.name}>{ind.name}</option>)}
                 </select>
               </div>
               <div className="col-span-1">
                 <label className="block text-sm font-medium text-gray-700">Lead Category</label>
-                <select name="leadCategory" value={formData.leadCategory} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                <select name="leadCategory" value={formData.leadCategory} onChange={handleChange} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white">
                   <option value="New Lead">New Lead</option>
                   <option value="Existing Lead">Existing Lead</option>
                   <option value="Collected">Collected</option>
@@ -297,7 +344,7 @@ const Entry = () => {
               <label className="block text-sm font-medium text-gray-700">Phone Numbers</label>
               {formData.phoneNumbers.map((phone, idx) => (
                 <div key={idx} className="flex gap-2">
-                  <input type="tel" value={phone} onChange={(e) => handleFieldChange('phoneNumbers', idx, e.target.value)} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+                  <input type="tel" value={phone} onChange={(e) => handleFieldChange('phoneNumbers', idx, e.target.value)} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white" />
                   {formData.phoneNumbers.length > 1 && (
                     <button type="button" onClick={() => handleRemoveField('phoneNumbers', idx)} className="text-red-500 p-2"><Trash2 className="w-4 h-4" /></button>
                   )}
@@ -311,7 +358,7 @@ const Entry = () => {
               <label className="block text-sm font-medium text-gray-700">Emails</label>
               {formData.emails.map((email, idx) => (
                 <div key={idx} className="flex gap-2">
-                  <input type="email" value={email} onChange={(e) => handleFieldChange('emails', idx, e.target.value)} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+                  <input type="email" value={email} onChange={(e) => handleFieldChange('emails', idx, e.target.value)} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white" />
                   {formData.emails.length > 1 && (
                     <button type="button" onClick={() => handleRemoveField('emails', idx)} className="text-red-500 p-2"><Trash2 className="w-4 h-4" /></button>
                   )}
@@ -331,10 +378,10 @@ const Entry = () => {
                       <button type="button" onClick={() => handleRemoveField('addresses', idx)} className="text-red-500"><Trash2 className="w-4 h-4" /></button>
                     )}
                   </div>
-                  <input type="text" placeholder="Street/Building" value={addr.street} onChange={(e) => handleAddressChange(idx, 'street', e.target.value)} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+                  <input type="text" placeholder="Street/Building" value={addr.street} onChange={(e) => handleAddressChange(idx, 'street', e.target.value)} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white" />
                   <div className="grid grid-cols-2 gap-3">
-                    <input type="text" placeholder="Area" value={addr.area} onChange={(e) => handleAddressChange(idx, 'area', e.target.value)} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
-                    <input type="text" placeholder="City" value={addr.city} onChange={(e) => handleAddressChange(idx, 'city', e.target.value)} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+                    <input type="text" placeholder="Area" value={addr.area} onChange={(e) => handleAddressChange(idx, 'area', e.target.value)} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white" />
+                    <input type="text" placeholder="City" value={addr.city} onChange={(e) => handleAddressChange(idx, 'city', e.target.value)} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white" />
                   </div>
                 </div>
               ))}
@@ -349,7 +396,7 @@ const Entry = () => {
             <h3 className="text-lg leading-6 font-medium text-gray-900">2. Requirement Information (Optional)</h3>
           </div>
           <div className="px-4 py-5 sm:p-6 space-y-4">
-            <textarea name="requirementInfo" rows={4} value={formData.requirementInfo} onChange={handleChange} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" placeholder="Enter requirements..."></textarea>
+            <textarea name="requirementInfo" rows={4} value={formData.requirementInfo} onChange={handleChange} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white" placeholder="Enter requirements..."></textarea>
             <div>
               <label className="block text-sm font-medium text-gray-700">Attachment</label>
               <div className="mt-1 flex items-center">
@@ -369,7 +416,7 @@ const Entry = () => {
             <h3 className="text-lg leading-6 font-medium text-gray-900">3. Lead's Comments (Optional)</h3>
           </div>
           <div className="px-4 py-5 sm:p-6">
-            <textarea name="comments" rows={4} value={formData.comments} onChange={handleChange} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" placeholder="Any additional comments..."></textarea>
+            <textarea name="comments" rows={4} value={formData.comments} onChange={handleChange} className="block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white" placeholder="Any additional comments..."></textarea>
           </div>
         </section>
 

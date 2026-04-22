@@ -3,10 +3,12 @@ import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import Login from './pages/Login';
+import Dashboard from './pages/Dashboard';
 import Entry from './pages/Entry';
 import DataBank from './pages/DataBank';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
+import SharedData from './pages/SharedData';
 
 function App() {
   return (
@@ -16,9 +18,10 @@ function App() {
           <Route path="/login" element={<Login />} />
           
           <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-            <Route index element={<Navigate to="/entry" replace />} />
+            <Route index element={<Dashboard />} />
             <Route path="entry" element={<Entry />} />
             <Route path="data-bank" element={<DataBank />} />
+            <Route path="shared-data" element={<SharedData />} />
             <Route path="reports" element={<Reports />} />
             
             <Route path="settings" element={

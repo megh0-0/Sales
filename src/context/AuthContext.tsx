@@ -23,11 +23,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Set global axios defaults
+    axios.defaults.timeout = 10000; // 10 seconds
+
     const savedUser = localStorage.getItem('user');
     if (savedUser) {
-      const parsedUser = JSON.parse(savedUser);
-      setUser(parsedUser);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${parsedUser.token}`;
+      try {
+        const parsedUser = JSON.parse(savedUser);
+        if (parsedUser && parsedUser.token) {
+          setUser(parsedUser);
+          axios.defaults.headers.common['Authorization'] = `Bearer ${parsedUser.token}`;
+        } else {
+          localStorage.removeItem('user');
+        }
+      } catch (error) {
+        console.error('Error parsing saved user:', error);
+        localStorage.removeItem('user');
+      }
     }
     setLoading(false);
   }, []);

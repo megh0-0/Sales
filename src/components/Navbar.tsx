@@ -1,6 +1,6 @@
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { LayoutDashboard, Database, BarChart3, Settings, LogOut, User } from 'lucide-react';
+import { Home, Database, BarChart3, Settings, LogOut, User, PlusCircle, Share2 } from 'lucide-react';
 import { clsx } from 'clsx';
 
 const Navbar = () => {
@@ -13,8 +13,10 @@ const Navbar = () => {
   };
 
   const navLinks = [
-    { to: '/entry', label: 'Entry', icon: LayoutDashboard },
+    { to: '/', label: 'Home', icon: Home, end: true },
+    { to: '/entry', label: 'Entry', icon: PlusCircle },
     { to: '/data-bank', label: 'Data Bank', icon: Database },
+    { to: '/shared-data', label: 'Shared', icon: Share2 },
     { to: '/reports', label: 'Reports', icon: BarChart3 },
   ];
 
@@ -27,14 +29,15 @@ const Navbar = () => {
       <div className="container mx-auto px-4">
         <div className="flex justify-between h-16">
           <div className="flex items-center space-x-8">
-            <div className="flex-shrink-0 flex items-center">
+            <Link to="/" className="flex-shrink-0 flex items-center">
               <span className="text-xl font-bold text-blue-600">SalesPro</span>
-            </div>
+            </Link>
             <div className="hidden md:flex space-x-4">
               {navLinks.map((link) => (
                 <NavLink
                   key={link.to}
                   to={link.to}
+                  end={link.end}
                   className={({ isActive }) =>
                     clsx(
                       'inline-flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors',
@@ -73,6 +76,7 @@ const Navbar = () => {
           <NavLink
             key={link.to}
             to={link.to}
+            end={link.end}
             className={({ isActive }) =>
               clsx(
                 'flex flex-col items-center px-2 py-1 text-xs font-medium rounded-md',
