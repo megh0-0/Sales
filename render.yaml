@@ -7,14 +7,16 @@ services:
     startCommand: npm start
     envVars:
       - key: MONGODB_URI
-        sync: false
+        value: mongodb+srv://mamegh00_db_user:TqjymprkP8rgk2vY@cluster0.rdl1tfp.mongodb.net/sales_pro_db
       - key: JWT_SECRET
         sync: false
-      - key: CLOUDINARY_CLOUD_NAME
+      - key: GOOGLE_VISION_API_KEY
         sync: false
-      - key: CLOUDINARY_API_KEY
+      - key: GOOGLE_CLIENT_ID
         sync: false
-      - key: CLOUDINARY_API_SECRET
+      - key: GOOGLE_CLIENT_SECRET
         sync: false
-      - key: GOOGLE_APPLICATION_CREDENTIALS
-        value: /etc/secrets/google-key.json
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_DRIVE_FOLDER_ID
+        sync: false
