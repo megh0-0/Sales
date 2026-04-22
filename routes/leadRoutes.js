@@ -113,11 +113,15 @@ router.post('/', protect, upload.fields([
     res.status(201).json(lead);
   } catch (error) {
     console.error('Save Error:', error);
-    let errorMsg = 'Failed to create lead';
-    if (error.message.includes('storage quota')) {
-      errorMsg = 'Google Drive Error: Service Account has no storage space. Please use a Shared Drive (Workspace) or contact support to switch to OAuth2.';
+    let errorMsg = error.message || 'Failed to create lead';
+    if (error.message && error.message.includes('storage quota')) {
+      errorMsg = 'Google Drive Error: Service Account has no storage space.';
     }
-    res.status(400).json({ message: errorMsg, details: error.message });
+    res.status(400).json({ 
+      message: 'Failed to create lead', 
+      details: errorMsg,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
@@ -129,7 +133,8 @@ router.get('/', protect, async (req, res) => {
     const leads = await Lead.find(query).populate('enteredBy', 'name phone').sort('-createdAt');
     res.json(leads);
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    console.error('Fetch Leads Error:', error);
+    res.status(500).json({ message: 'Failed to load leads', details: error.message });
   }
 });
 
