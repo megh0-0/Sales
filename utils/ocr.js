@@ -110,7 +110,7 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
   if (geminiKey && geminiKey !== 'your_google_api_key' && imageBuffer) {
-    const modelsToTry = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-flash-latest"];
+    const modelsToTry = ["gemini-2.5-flash", "gemini-flash-latest"];
     const base64Image = imageBuffer.toString('base64');
 
     for (const modelName of modelsToTry) {
