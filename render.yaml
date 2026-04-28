@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: sales-app-backend
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: MONGODB_URI
+        value: mongodb+srv://mamegh00_db_user:TqjymprkP8rgk2vY@cluster0.rdl1tfp.mongodb.net/sales_pro_db
+      - key: JWT_SECRET
+        sync: false
+      - key: GOOGLE_VISION_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_DRIVE_FOLDER_ID
+        sync: false
