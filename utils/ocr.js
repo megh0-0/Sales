@@ -108,12 +108,12 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
   if (geminiKey && geminiKey !== 'your_google_api_key' && imageBuffer) {
-    console.log("Initiating Gemini AI Multimodal Parsing...");
+    console.log("Initiating Gemini AI Multimodal Parsing (Latest)...");
     try {
       const genAI = new GoogleGenerativeAI(geminiKey);
-      // Use the most compatible model ID for the current SDK
+      // Using 'gemini-1.5-flash-latest' which is the most stable redirect
       const model = genAI.getGenerativeModel({ 
-        model: "gemini-1.5-flash",
+        model: "gemini-1.5-flash-latest",
         generationConfig: { responseMimeType: "application/json" }
       });
 
@@ -148,7 +148,13 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
 
       const result = await model.generateContent(promptParts);
       const response = await result.response;
-      const text = response.text();
+      let text = response.text();
+      
+      // Safety: Strip markdown if JSON mode failed but returned text
+      if (text.includes('```')) {
+        text = text.replace(/```json|```/g, '').trim();
+      }
+      
       const aiResult = JSON.parse(text);
       
       if (aiResult) {
@@ -163,13 +169,12 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
         };
       }
     } catch (e) {
-      console.error("Gemini AI Error (404/API), falling back to Local Rules...", e.message);
-      // Logic continues to fallback below
+      console.error("Gemini AI Error (Fallback Triggered):", e.message);
     }
   }
 
-  // --- LOCAL FALLBACK ENGINE (Guaranteed to fill fields if OCR exists) ---
-  console.log("Local Fallback Active. Processing OCR text...");
+  // --- LOCAL FALLBACK ENGINE (Guaranteed to return data if any text was found) ---
+  console.log("Local Fallback Active...");
   const data = { companyName: '', contactPersonName: '', designation: '', phoneNumbers: [], emails: [], addresses: [] };
   
   if (qrData && qrData.toUpperCase().includes('BEGIN:VCARD')) {
@@ -179,20 +184,22 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const cleanText = fullText || '';
   const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 1);
   
+  // Regex for phones and emails
   if (!data.emails.length) data.emails = [...new Set((cleanText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []).map(e => e.toLowerCase()))];
   if (!data.phoneNumbers.length) data.phoneNumbers = [...new Set((cleanText.match(/(?:\+|00)?(?:\d[.\s-]?){8,15}/g) || []).map(p => p.trim()))];
   
-  if (!data.contactPersonName) data.contactPersonName = lines.find(l => /Md\.|Engr\.|Mr\.|Mrs\.|Ms\.|Dr\./i.test(l)) || lines[0] || '';
-  if (!data.companyName) data.companyName = lines.find(l => /Ltd|Limited|Corp|Inc|Group|Pvt/i.test(l)) || lines[1] || '';
-  
-  if (data.addresses.length === 0 && lines.length > 0) {
-    // Take lines that look like addresses or the last few lines
-    const addrLines = lines.filter(l => /Road|Plot|House|Block|Street|Floor|Area|Dhaka/i.test(l));
-    data.addresses = [{ 
-      street: addrLines.length > 0 ? addrLines.join(', ') : lines.slice(-2).join(', '), 
-      area: '', 
-      city: '' 
-    }];
+  if (lines.length > 0) {
+    if (!data.contactPersonName) data.contactPersonName = lines.find(l => /Md\.|Engr\.|Mr\.|Mrs\.|Ms\.|Dr\./i.test(l)) || lines[0];
+    if (!data.companyName) data.companyName = lines.find(l => /Ltd|Limited|Corp|Inc|Group|Pvt/i.test(l)) || lines[1] || lines[0];
+    
+    if (data.addresses.length === 0) {
+      const addrLines = lines.filter(l => /Road|Plot|House|Block|Street|Floor|Area|Dhaka/i.test(l));
+      data.addresses = [{ 
+        street: addrLines.length > 0 ? addrLines.join(', ') : lines.slice(-2).join(', '), 
+        area: '', 
+        city: '' 
+      }];
+    }
   }
 
   return data;
