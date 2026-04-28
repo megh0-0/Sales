@@ -110,19 +110,34 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
   if (geminiKey && geminiKey !== 'your_google_api_key' && imageBuffer) {
-    console.log("Initiating Gemini AI Multimodal Parsing...");
+    console.log("Initiating Gemini AI Multimodal Parsing (v1 Stable)...");
     try {
+      // Force v1 API version to avoid v1beta 404 errors
       const genAI = new GoogleGenerativeAI(geminiKey);
-      // Use standard model ID
       const model = genAI.getGenerativeModel({ 
         model: "gemini-1.5-flash",
-        generationConfig: { responseMimeType: "application/json" }
-      });
+      }, { apiVersion: 'v1' });
 
       const promptParts = [
-        `EXTRACT BUSINESS CARD DATA. JSON ONLY.
-        SCHEMA: {"companyName":"","contactPersonName":"","designation":"","phoneNumbers":[],"emails":[],"addresses":[{"street":"","area":"","city":""}]}
-        RULES: No slogans. Extract ALL addresses.`,
+        `EXTRACT BUSINESS CARD DATA INTO JSON.
+        STRICT RULES:
+        1. NO SLOGANS: Ignore mission statements, taglines (e.g. "Quality First").
+        2. ADDRESSES: Extract ALL distinct physical addresses.
+        3. FORMAT: Output ONLY pure JSON.
+        
+        SCHEMA:
+        {
+          "companyName": "",
+          "contactPersonName": "",
+          "designation": "",
+          "phoneNumbers": [],
+          "emails": [],
+          "addresses": [{"street": "", "area": "", "city": ""}]
+        }
+
+        INPUTS:
+        - QR: ${qrData || 'N/A'}
+        - OCR: ${fullText || 'N/A'}`,
         {
           inlineData: {
             data: imageBuffer.toString('base64'),
@@ -134,12 +149,7 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
       const result = await model.generateContent(promptParts);
       const response = await result.response;
       let text = response.text();
-      
-      // Safety: Strip markdown if JSON mode failed but returned text
-      if (text.includes('```')) {
-        text = text.replace(/```json|```/g, '').trim();
-      }
-      
+      if (text.includes('```')) text = text.replace(/```json|```/g, '').trim();
       const aiResult = JSON.parse(text);
       
       if (aiResult) {
@@ -158,8 +168,8 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
     }
   }
 
-  // --- LOCAL FALLBACK ENGINE (Guaranteed to return data if any text was found) ---
-  console.log("Local Fallback Active...");
+  // --- IMPROVED LOCAL FALLBACK ENGINE ---
+  console.log("Local Fallback Active. Filtering slogans...");
   const data = { companyName: '', contactPersonName: '', designation: '', phoneNumbers: [], emails: [], addresses: [] };
   
   if (qrData && qrData.toUpperCase().includes('BEGIN:VCARD')) {
@@ -167,9 +177,18 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   } 
 
   const cleanText = fullText || '';
-  const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 1);
+  const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   
-  // Regex for phones and emails
+  // Better Address Detection
+  const addrKeywords = ['Road', 'House', 'Plot', 'Block', 'Floor', 'Avenue', 'Street', 'Dhaka', 'Chittagong', 'Banani', 'Gulshan', 'Uttara', 'Industrial'];
+  const slogansKeywords = ['Quality', 'Service', 'Since', 'Trust', 'Leading', 'ISO', 'Certified', 'Partner', 'World Class'];
+  
+  const potentialAddresses = lines.filter(l => 
+    addrKeywords.some(k => l.includes(k)) && 
+    !slogansKeywords.some(s => l.includes(s)) &&
+    l.length > 10
+  );
+
   if (!data.emails.length) data.emails = [...new Set((cleanText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []).map(e => e.toLowerCase()))];
   if (!data.phoneNumbers.length) data.phoneNumbers = [...new Set((cleanText.match(/(?:\+|00)?(?:\d[.\s-]?){8,15}/g) || []).map(p => p.trim()))];
   
@@ -178,17 +197,11 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
     if (!data.companyName) data.companyName = lines.find(l => /Ltd|Limited|Corp|Inc|Group|Pvt/i.test(l)) || lines[1] || lines[0] || '';
     
     if (data.addresses.length === 0) {
-      const addrLines = lines.filter(l => /Road|Plot|House|Block|Street|Floor|Area|Dhaka/i.test(l));
-      data.addresses = [{ 
-        street: addrLines.length > 0 ? addrLines.join(', ') : (lines.length > 2 ? lines.slice(-2).join(', ') : (lines[0] || '')), 
-        area: '', 
-        city: '' 
-      }];
+      data.addresses = potentialAddresses.length > 0 
+        ? [{ street: potentialAddresses[0], area: '', city: '' }] 
+        : [{ street: '', area: '', city: '' }];
     }
   }
-
-  // Ensure minimum one address object exists
-  if (data.addresses.length === 0) data.addresses = [{ street: '', area: '', city: '' }];
 
   return data;
 }
