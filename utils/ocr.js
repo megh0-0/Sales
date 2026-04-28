@@ -110,34 +110,18 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
   if (geminiKey && geminiKey !== 'your_google_api_key' && imageBuffer) {
-    console.log("Initiating Gemini AI Multimodal Parsing (v1 Stable)...");
+    console.log("Initiating Gemini AI Multimodal Parsing (Deep Scan)...");
     try {
-      // Force v1 API version to avoid v1beta 404 errors
       const genAI = new GoogleGenerativeAI(geminiKey);
+      // Using 'models/' prefix and v1beta for maximum compatibility
       const model = genAI.getGenerativeModel({ 
-        model: "gemini-1.5-flash",
-      }, { apiVersion: 'v1' });
+        model: "models/gemini-1.5-flash",
+      }, { apiVersion: 'v1beta' });
 
       const promptParts = [
-        `EXTRACT BUSINESS CARD DATA INTO JSON.
-        STRICT RULES:
-        1. NO SLOGANS: Ignore mission statements, taglines (e.g. "Quality First").
-        2. ADDRESSES: Extract ALL distinct physical addresses.
-        3. FORMAT: Output ONLY pure JSON.
-        
-        SCHEMA:
-        {
-          "companyName": "",
-          "contactPersonName": "",
-          "designation": "",
-          "phoneNumbers": [],
-          "emails": [],
-          "addresses": [{"street": "", "area": "", "city": ""}]
-        }
-
-        INPUTS:
-        - QR: ${qrData || 'N/A'}
-        - OCR: ${fullText || 'N/A'}`,
+        `EXTRACT BUSINESS CARD DATA. JSON ONLY.
+        NO SLOGANS. Extract ALL physical addresses.
+        SCHEMA: {"companyName":"","contactPersonName":"","designation":"","phoneNumbers":[],"emails":[],"addresses":[{"street":"","area":"","city":""}]}`,
         {
           inlineData: {
             data: imageBuffer.toString('base64'),
@@ -147,9 +131,7 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
       ];
 
       const result = await model.generateContent(promptParts);
-      const response = await result.response;
-      let text = response.text();
-      if (text.includes('```')) text = text.replace(/```json|```/g, '').trim();
+      const text = result.response.text().replace(/```json|```/g, '').trim();
       const aiResult = JSON.parse(text);
       
       if (aiResult) {
@@ -164,12 +146,12 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
         };
       }
     } catch (e) {
-      console.error("Gemini AI Error (Fallback Triggered):", e.message);
+      console.error("Gemini AI 404/Error, using Deep Scan Fallback:", e.message);
     }
   }
 
-  // --- IMPROVED LOCAL FALLBACK ENGINE ---
-  console.log("Local Fallback Active. Filtering slogans...");
+  // --- DEEP SCAN LOCAL FALLBACK ENGINE ---
+  console.log("Deep Scan Fallback Active...");
   const data = { companyName: '', contactPersonName: '', designation: '', phoneNumbers: [], emails: [], addresses: [] };
   
   if (qrData && qrData.toUpperCase().includes('BEGIN:VCARD')) {
@@ -179,29 +161,42 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const cleanText = fullText || '';
   const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   
-  // Better Address Detection
-  const addrKeywords = ['Road', 'House', 'Plot', 'Block', 'Floor', 'Avenue', 'Street', 'Dhaka', 'Chittagong', 'Banani', 'Gulshan', 'Uttara', 'Industrial'];
-  const slogansKeywords = ['Quality', 'Service', 'Since', 'Trust', 'Leading', 'ISO', 'Certified', 'Partner', 'World Class'];
-  
-  const potentialAddresses = lines.filter(l => 
-    addrKeywords.some(k => l.includes(k)) && 
-    !slogansKeywords.some(s => l.includes(s)) &&
-    l.length > 10
-  );
-
+  // 1. Emails & Phones (Regex based - very accurate)
   if (!data.emails.length) data.emails = [...new Set((cleanText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []).map(e => e.toLowerCase()))];
   if (!data.phoneNumbers.length) data.phoneNumbers = [...new Set((cleanText.match(/(?:\+|00)?(?:\d[.\s-]?){8,15}/g) || []).map(p => p.trim()))];
   
-  if (lines.length > 0) {
-    if (!data.contactPersonName) data.contactPersonName = lines.find(l => /Md\.|Engr\.|Mr\.|Mrs\.|Ms\.|Dr\./i.test(l)) || lines[0] || '';
-    if (!data.companyName) data.companyName = lines.find(l => /Ltd|Limited|Corp|Inc|Group|Pvt/i.test(l)) || lines[1] || lines[0] || '';
+  // 2. Filter out Slogans
+  const slogans = ['Quality', 'Service', 'Since', 'Trust', 'Leading', 'ISO', 'Certified', 'Partner', 'World Class', 'Experience', 'Commitment', 'Excellence'];
+  const cleanLines = lines.filter(l => !slogans.some(s => l.includes(s)));
+
+  // 3. Name Detection
+  if (!data.contactPersonName) {
+    data.contactPersonName = cleanLines.find(l => /Md\.|Engr\.|Mr\.|Mrs\.|Ms\.|Dr\.|S\.M\.|Sheikh|Mohammad/i.test(l)) || cleanLines[0] || '';
+  }
+
+  // 4. Company Detection
+  if (!data.companyName) {
+    data.companyName = cleanLines.find(l => /Ltd|Limited|Corp|Inc|Group|Pvt|Enterprise|Solution|Agency|Bank/i.test(l)) || cleanLines[1] || '';
+  }
+
+  // 5. Address Detection (Multi-line support)
+  if (data.addresses.length === 0) {
+    const addrKeywords = ['Road', 'House', 'Plot', 'Block', 'Floor', 'Avenue', 'Street', 'Building', 'No.', 'Dhaka', 'Chittagong', 'Banani', 'Gulshan', 'Uttara', 'Industrial'];
+    const addrLines = cleanLines.filter(l => addrKeywords.some(k => l.includes(k)) && l.length > 8);
     
-    if (data.addresses.length === 0) {
-      data.addresses = potentialAddresses.length > 0 
-        ? [{ street: potentialAddresses[0], area: '', city: '' }] 
-        : [{ street: '', area: '', city: '' }];
+    if (addrLines.length > 0) {
+      // Split into multiple addresses if they seem distinct
+      addrLines.forEach(line => {
+        data.addresses.push({ street: line, area: '', city: '' });
+      });
+    } else if (cleanLines.length > 2) {
+      // Take last 2 lines as a guess
+      data.addresses = [{ street: cleanLines.slice(-2).join(', '), area: '', city: '' }];
     }
   }
+
+  // Ensure minimum one address object
+  if (data.addresses.length === 0) data.addresses = [{ street: '', area: '', city: '' }];
 
   return data;
 }
