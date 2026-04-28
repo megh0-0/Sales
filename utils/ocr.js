@@ -110,33 +110,31 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
   if (geminiKey && geminiKey !== 'your_google_api_key' && imageBuffer) {
-    const genAI = new GoogleGenerativeAI(geminiKey);
-    
-    // Try Flash first, then Pro as backup to avoid 404s
-    const modelsToTry = ["gemini-1.5-flash", "gemini-pro"];
-    
-    for (const modelName of modelsToTry) {
-      console.log(`Attempting Gemini AI (${modelName})...`);
-      try {
-        const model = genAI.getGenerativeModel({ model: modelName });
-        const promptParts = [
-          `EXTRACT BUSINESS CARD DATA. JSON ONLY.
-          NO SLOGANS. Extract ALL physical addresses.
-          SCHEMA: {"companyName":"","contactPersonName":"","designation":"","phoneNumbers":[],"emails":[],"addresses":[{"street":"","area":"","city":""}]}`,
-          {
-            inlineData: {
-              data: imageBuffer.toString('base64'),
-              mimeType: "image/jpeg"
-            }
-          }
-        ];
+    const modelsToTry = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-1.0-pro"];
+    const base64Image = imageBuffer.toString('base64');
 
-        const result = await model.generateContent(promptParts);
-        const text = result.response.text().replace(/```json|```/g, '').trim();
-        const aiResult = JSON.parse(text);
+    for (const modelName of modelsToTry) {
+      console.log(`Attempting Gemini AI via REST (${modelName})...`);
+      try {
+        // Using Manual REST API call to bypass SDK 404 bugs
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiKey}`;
         
+        const payload = {
+          contents: [{
+            parts: [
+              { text: "EXTRACT BUSINESS CARD DATA. JSON ONLY. NO SLOGANS. SCHEMA: {\"companyName\":\"\",\"contactPersonName\":\"\",\"designation\":\"\",\"phoneNumbers\":[],\"emails\":[],\"addresses\":[{\"street\":\"\",\"area\":\"\",\"city\":\"\"}]}" },
+              { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+            ]
+          }],
+          generationConfig: { response_mime_type: "application/json" }
+        };
+
+        const response = await axios.post(url, payload, { timeout: 15000 });
+        const aiText = response.data.candidates[0].content.parts[0].text;
+        const aiResult = JSON.parse(aiText);
+
         if (aiResult) {
-          console.log(`Gemini AI (${modelName}) success.`);
+          console.log(`Gemini AI (${modelName}) REST Success.`);
           return {
             companyName: aiResult.companyName || '',
             contactPersonName: aiResult.contactPersonName || '',
@@ -147,17 +145,15 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
           };
         }
       } catch (e) {
-        console.error(`${modelName} failed: ${e.message}`);
-        if (modelName === modelsToTry[modelsToTry.length - 1]) {
-          console.log("All AI models failed, using Strict Local Fallback...");
-        } else {
-          console.log("Trying next model...");
-        }
+        const errorDetail = e.response?.data?.error?.message || e.message;
+        console.error(`${modelName} REST failed: ${errorDetail}`);
+        // Continue to next model or fallback
       }
     }
   }
 
   // --- STRICT LOCAL FALLBACK ENGINE ---
+  console.log("Using Deep Scan Local Fallback...");
   const data = { companyName: '', contactPersonName: '', designation: '', phoneNumbers: [], emails: [], addresses: [] };
   if (qrData && qrData.toUpperCase().includes('BEGIN:VCARD')) {
     Object.assign(data, parseVCard(qrData));
