@@ -110,50 +110,55 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
   if (geminiKey && geminiKey !== 'your_google_api_key' && imageBuffer) {
-    console.log("Initiating Gemini AI Multimodal Parsing (Deep Scan)...");
-    try {
-      const genAI = new GoogleGenerativeAI(geminiKey);
-      // Using 'models/' prefix and v1beta for maximum compatibility
-      const model = genAI.getGenerativeModel({ 
-        model: "models/gemini-1.5-flash",
-      }, { apiVersion: 'v1beta' });
-
-      const promptParts = [
-        `EXTRACT BUSINESS CARD DATA. JSON ONLY.
-        NO SLOGANS. Extract ALL physical addresses.
-        SCHEMA: {"companyName":"","contactPersonName":"","designation":"","phoneNumbers":[],"emails":[],"addresses":[{"street":"","area":"","city":""}]}`,
-        {
-          inlineData: {
-            data: imageBuffer.toString('base64'),
-            mimeType: "image/jpeg"
+    const genAI = new GoogleGenerativeAI(geminiKey);
+    
+    // Try Flash first, then Pro as backup to avoid 404s
+    const modelsToTry = ["gemini-1.5-flash", "gemini-pro"];
+    
+    for (const modelName of modelsToTry) {
+      console.log(`Attempting Gemini AI (${modelName})...`);
+      try {
+        const model = genAI.getGenerativeModel({ model: modelName });
+        const promptParts = [
+          `EXTRACT BUSINESS CARD DATA. JSON ONLY.
+          NO SLOGANS. Extract ALL physical addresses.
+          SCHEMA: {"companyName":"","contactPersonName":"","designation":"","phoneNumbers":[],"emails":[],"addresses":[{"street":"","area":"","city":""}]}`,
+          {
+            inlineData: {
+              data: imageBuffer.toString('base64'),
+              mimeType: "image/jpeg"
+            }
           }
-        }
-      ];
+        ];
 
-      const result = await model.generateContent(promptParts);
-      const text = result.response.text().replace(/```json|```/g, '').trim();
-      const aiResult = JSON.parse(text);
-      
-      if (aiResult) {
-        console.log("Gemini AI Parsing successful.");
-        return {
-          companyName: aiResult.companyName || '',
-          contactPersonName: aiResult.contactPersonName || '',
-          designation: aiResult.designation || '',
-          phoneNumbers: Array.isArray(aiResult.phoneNumbers) ? aiResult.phoneNumbers : [],
-          emails: Array.isArray(aiResult.emails) ? aiResult.emails : [],
-          addresses: Array.isArray(aiResult.addresses) ? aiResult.addresses : []
-        };
+        const result = await model.generateContent(promptParts);
+        const text = result.response.text().replace(/```json|```/g, '').trim();
+        const aiResult = JSON.parse(text);
+        
+        if (aiResult) {
+          console.log(`Gemini AI (${modelName}) success.`);
+          return {
+            companyName: aiResult.companyName || '',
+            contactPersonName: aiResult.contactPersonName || '',
+            designation: aiResult.designation || '',
+            phoneNumbers: Array.isArray(aiResult.phoneNumbers) ? aiResult.phoneNumbers : [],
+            emails: Array.isArray(aiResult.emails) ? aiResult.emails : [],
+            addresses: Array.isArray(aiResult.addresses) ? aiResult.addresses : []
+          };
+        }
+      } catch (e) {
+        console.error(`${modelName} failed: ${e.message}`);
+        if (modelName === modelsToTry[modelsToTry.length - 1]) {
+          console.log("All AI models failed, using Strict Local Fallback...");
+        } else {
+          console.log("Trying next model...");
+        }
       }
-    } catch (e) {
-      console.error("Gemini AI 404/Error, using Deep Scan Fallback:", e.message);
     }
   }
 
-  // --- DEEP SCAN LOCAL FALLBACK ENGINE ---
-  console.log("Deep Scan Fallback Active...");
+  // --- STRICT LOCAL FALLBACK ENGINE ---
   const data = { companyName: '', contactPersonName: '', designation: '', phoneNumbers: [], emails: [], addresses: [] };
-  
   if (qrData && qrData.toUpperCase().includes('BEGIN:VCARD')) {
     Object.assign(data, parseVCard(qrData));
   } 
@@ -161,43 +166,35 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const cleanText = fullText || '';
   const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   
-  // 1. Emails & Phones (Regex based - very accurate)
+  // 1. Basic Data (Regex)
   if (!data.emails.length) data.emails = [...new Set((cleanText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []).map(e => e.toLowerCase()))];
   if (!data.phoneNumbers.length) data.phoneNumbers = [...new Set((cleanText.match(/(?:\+|00)?(?:\d[.\s-]?){8,15}/g) || []).map(p => p.trim()))];
   
-  // 2. Filter out Slogans
-  const slogans = ['Quality', 'Service', 'Since', 'Trust', 'Leading', 'ISO', 'Certified', 'Partner', 'World Class', 'Experience', 'Commitment', 'Excellence'];
-  const cleanLines = lines.filter(l => !slogans.some(s => l.includes(s)));
+  // 2. Slogan Filtering (Stricter)
+  const sloganBlacklist = ['Quality', 'Service', 'Since', 'Trust', 'Leading', 'ISO', 'Certified', 'Partner', 'World Class', 'Experience', 'Commitment', 'Excellence', 'Best', 'Reliable'];
+  const cleanLines = lines.filter(l => !sloganBlacklist.some(s => l.includes(s)));
 
-  // 3. Name Detection
-  if (!data.contactPersonName) {
-    data.contactPersonName = cleanLines.find(l => /Md\.|Engr\.|Mr\.|Mrs\.|Ms\.|Dr\.|S\.M\.|Sheikh|Mohammad/i.test(l)) || cleanLines[0] || '';
-  }
+  // 3. Name & Company
+  if (!data.contactPersonName) data.contactPersonName = cleanLines.find(l => /Md\.|Engr\.|Mr\.|Mrs\.|Ms\.|Dr\.|S\.M\.|Sheikh|Mohammad/i.test(l)) || cleanLines[0] || '';
+  if (!data.companyName) data.companyName = cleanLines.find(l => /Ltd|Limited|Corp|Inc|Group|Pvt|Enterprise/i.test(l)) || cleanLines[1] || '';
 
-  // 4. Company Detection
-  if (!data.companyName) {
-    data.companyName = cleanLines.find(l => /Ltd|Limited|Corp|Inc|Group|Pvt|Enterprise|Solution|Agency|Bank/i.test(l)) || cleanLines[1] || '';
-  }
-
-  // 5. Address Detection (Multi-line support)
+  // 4. Numeric-Strict Address Detection (Addresses must have a number)
   if (data.addresses.length === 0) {
-    const addrKeywords = ['Road', 'House', 'Plot', 'Block', 'Floor', 'Avenue', 'Street', 'Building', 'No.', 'Dhaka', 'Chittagong', 'Banani', 'Gulshan', 'Uttara', 'Industrial'];
-    const addrLines = cleanLines.filter(l => addrKeywords.some(k => l.includes(k)) && l.length > 8);
+    const addrKeywords = ['Road', 'House', 'Plot', 'Block', 'Floor', 'Avenue', 'Street', 'Building', 'No.', 'Dhaka', 'Chittagong', 'Gulshan', 'Uttara'];
+    const addrLines = cleanLines.filter(l => 
+      addrKeywords.some(k => l.includes(k)) && 
+      /\d/.test(l) && // MUST contain a digit (House #, Road #, etc.)
+      l.length > 8
+    );
     
     if (addrLines.length > 0) {
-      // Split into multiple addresses if they seem distinct
-      addrLines.forEach(line => {
-        data.addresses.push({ street: line, area: '', city: '' });
-      });
+      addrLines.forEach(line => data.addresses.push({ street: line, area: '', city: '' }));
     } else if (cleanLines.length > 2) {
-      // Take last 2 lines as a guess
       data.addresses = [{ street: cleanLines.slice(-2).join(', '), area: '', city: '' }];
     }
   }
 
-  // Ensure minimum one address object
   if (data.addresses.length === 0) data.addresses = [{ street: '', area: '', city: '' }];
-
   return data;
 }
 
