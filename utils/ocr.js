@@ -62,6 +62,8 @@ async function extractTextAndRotate(imageSource) {
       } catch (e) {
         console.error('Vision API Error:', e.message);
       }
+    } else {
+      console.warn('WARNING: Vision API Key is missing. Fallback results will be limited.');
     }
     
     return { fullText, detections, rotatedImage: visionBuffer, qrData };
@@ -108,36 +110,19 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
   if (geminiKey && geminiKey !== 'your_google_api_key' && imageBuffer) {
-    console.log("Initiating Gemini AI Multimodal Parsing (Latest)...");
+    console.log("Initiating Gemini AI Multimodal Parsing...");
     try {
       const genAI = new GoogleGenerativeAI(geminiKey);
-      // Using 'gemini-1.5-flash-latest' which is the most stable redirect
+      // Use standard model ID
       const model = genAI.getGenerativeModel({ 
-        model: "gemini-1.5-flash-latest",
+        model: "gemini-1.5-flash",
         generationConfig: { responseMimeType: "application/json" }
       });
 
       const promptParts = [
-        `EXTRACT BUSINESS CARD DATA INTO JSON.
-        
-        RULES:
-        1. ADDRESSES: Extract EVERY location (Head Office, Branch, etc.). 
-        2. NO SLOGANS: Ignore mission statements or taglines.
-        3. DESIGNATION: Extract job title.
-        
-        JSON SCHEMA:
-        {
-          "companyName": "",
-          "contactPersonName": "",
-          "designation": "",
-          "phoneNumbers": [],
-          "emails": [],
-          "addresses": [{"street": "", "area": "", "city": ""}]
-        }
-
-        INPUTS:
-        - QR: ${qrData || 'N/A'}
-        - OCR HINT: ${fullText || 'N/A'}`,
+        `EXTRACT BUSINESS CARD DATA. JSON ONLY.
+        SCHEMA: {"companyName":"","contactPersonName":"","designation":"","phoneNumbers":[],"emails":[],"addresses":[{"street":"","area":"","city":""}]}
+        RULES: No slogans. Extract ALL addresses.`,
         {
           inlineData: {
             data: imageBuffer.toString('base64'),
@@ -189,18 +174,21 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   if (!data.phoneNumbers.length) data.phoneNumbers = [...new Set((cleanText.match(/(?:\+|00)?(?:\d[.\s-]?){8,15}/g) || []).map(p => p.trim()))];
   
   if (lines.length > 0) {
-    if (!data.contactPersonName) data.contactPersonName = lines.find(l => /Md\.|Engr\.|Mr\.|Mrs\.|Ms\.|Dr\./i.test(l)) || lines[0];
-    if (!data.companyName) data.companyName = lines.find(l => /Ltd|Limited|Corp|Inc|Group|Pvt/i.test(l)) || lines[1] || lines[0];
+    if (!data.contactPersonName) data.contactPersonName = lines.find(l => /Md\.|Engr\.|Mr\.|Mrs\.|Ms\.|Dr\./i.test(l)) || lines[0] || '';
+    if (!data.companyName) data.companyName = lines.find(l => /Ltd|Limited|Corp|Inc|Group|Pvt/i.test(l)) || lines[1] || lines[0] || '';
     
     if (data.addresses.length === 0) {
       const addrLines = lines.filter(l => /Road|Plot|House|Block|Street|Floor|Area|Dhaka/i.test(l));
       data.addresses = [{ 
-        street: addrLines.length > 0 ? addrLines.join(', ') : lines.slice(-2).join(', '), 
+        street: addrLines.length > 0 ? addrLines.join(', ') : (lines.length > 2 ? lines.slice(-2).join(', ') : (lines[0] || '')), 
         area: '', 
         city: '' 
       }];
     }
   }
+
+  // Ensure minimum one address object exists
+  if (data.addresses.length === 0) data.addresses = [{ street: '', area: '', city: '' }];
 
   return data;
 }
