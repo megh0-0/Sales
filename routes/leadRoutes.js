@@ -67,7 +67,11 @@ router.get('/', protect, async (req, res) => {
   try {
     let query = {};
     if (req.user.role === 'Employee') query.enteredBy = req.user._id;
-    const leads = await Lead.find(query).populate('enteredBy', 'name phone').populate('shares.sharedWith', 'name role').sort('-createdAt');
+    const leads = await Lead.find(query)
+      .populate('enteredBy', 'name phone')
+      .populate('shares.sharedWith', 'name role')
+      .populate('shares.sharedBy', 'name phone')
+      .sort('-createdAt');
     res.json(leads);
   } catch (error) { res.status(500).json({ message: 'Server error' }); }
 });
@@ -75,7 +79,11 @@ router.get('/', protect, async (req, res) => {
 // @desc    Get leads shared with user
 router.get('/shared', protect, async (req, res) => {
   try {
-    const leads = await Lead.find({ 'shares.sharedWith': req.user._id }).populate('enteredBy', 'name phone').populate('shares.sharedWith', 'name role').sort('-createdAt');
+    const leads = await Lead.find({ 'shares.sharedWith': req.user._id })
+      .populate('enteredBy', 'name phone')
+      .populate('shares.sharedWith', 'name role')
+      .populate('shares.sharedBy', 'name phone')
+      .sort('-createdAt');
     res.json(leads);
   } catch (error) { res.status(500).json({ message: 'Server error' }); }
 });
@@ -201,9 +209,41 @@ router.post('/:id/share', protect, async (req, res) => {
     const { userIds } = req.body;
     userIds.forEach(uId => { if (!lead.shares.some(s => s.sharedWith.toString() === uId)) lead.shares.push({ sharedWith: uId, sharedBy: req.user._id }); });
     await lead.save();
-    for (const uId of userIds) { await sendPushNotification(uId, { title: 'New Lead Shared', body: `${req.user.name} shared ${lead.companyName} with you.`, data: { url: '/shared-data' } }); }
+    for (const uId of userIds) { await sendPushNotification(uId, { title: 'New Lead Shared', body: `${req.user.name} shared ${lead.companyName} with you.`, data: { url: '/shared-leads' } }); }
     res.json(lead);
   } catch (error) { res.status(500).json({ message: error.message }); }
+});
+
+// @desc    Bulk share leads
+router.post('/bulk-share', protect, async (req, res) => {
+  try {
+    const { leadIds, userIds } = req.body;
+    if (!leadIds?.length || !userIds?.length) return res.status(400).json({ message: 'Missing lead or user IDs' });
+
+    const leads = await Lead.find({ _id: { $in: leadIds } });
+    
+    for (const lead of leads) {
+      userIds.forEach(uId => {
+        if (!lead.shares.some(s => s.sharedWith.toString() === uId)) {
+          lead.shares.push({ sharedWith: uId, sharedBy: req.user._id });
+        }
+      });
+      await lead.save();
+      
+      // Notify each user
+      for (const uId of userIds) {
+        await sendPushNotification(uId, {
+          title: 'New Leads Shared',
+          body: `${req.user.name} shared ${leads.length} leads with you.`,
+          data: { url: '/shared-leads' }
+        });
+      }
+    }
+    
+    res.json({ message: `Successfully shared ${leads.length} leads with ${userIds.length} users` });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 });
 
 // @desc    Revoke shared access
@@ -224,6 +264,60 @@ router.delete('/:id', protect, async (req, res) => {
     await Lead.findByIdAndDelete(req.params.id);
     res.json({ message: 'Deleted' });
   } catch (error) { res.status(500).json({ message: error.message }); }
+});
+
+// @desc    Get dashboard stats
+router.get('/dashboard-stats', protect, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const user = await User.findById(userId);
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+    const leads = await Lead.find({
+      enteredBy: userId,
+      status: 'Closed', // Assuming 'Closed' means Sales Complete
+      updatedAt: { $gte: monthStart }
+    });
+
+    const completed = leads.reduce((sum, lead) => sum + (lead.projectValue || 0), 0);
+    const totalLeads = await Lead.countDocuments({ enteredBy: userId });
+
+    res.json({
+      totalLeads,
+      target: user.monthlyTarget || 0,
+      completed
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// @desc    Get upcoming follow-ups
+router.get('/upcoming-followups', protect, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const today = new Date();
+    const startOfToday = new Date(today.setHours(0, 0, 0, 0));
+
+    const leads = await Lead.find({
+      enteredBy: userId,
+      'followUps.date': { $gte: startOfToday }
+    }).select('companyName followUps');
+
+    const followUps = leads.flatMap(lead => 
+      lead.followUps
+        .filter(f => new Date(f.date) >= startOfToday)
+        .map(f => ({
+          companyName: lead.companyName,
+          date: f.date,
+          note: f.note
+        }))
+    ).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    res.json(followUps.slice(0, 5)); // Return top 5
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 });
 
 module.exports = { router };
