@@ -111,6 +111,7 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
     console.log("Initiating Gemini AI Multimodal Parsing...");
     try {
       const genAI = new GoogleGenerativeAI(geminiKey);
+      // Use the most compatible model ID for the current SDK
       const model = genAI.getGenerativeModel({ 
         model: "gemini-1.5-flash",
         generationConfig: { responseMimeType: "application/json" }
@@ -119,25 +120,24 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
       const promptParts = [
         `EXTRACT BUSINESS CARD DATA INTO JSON.
         
-        STRICT FILTERS:
+        RULES:
         1. ADDRESSES: Extract EVERY location (Head Office, Branch, etc.). 
-        2. NO SLOGANS: Strictly ignore "Quality First", "Since 19xx", "Your partner in...", "ISO Certified" or mission statements.
-        3. DESIGNATION: Must be a job title like Manager, Director, Engineer.
-        4. CLEANUP: No icons (📞, ✉️), no labels like "Web:" or "Mob:".
+        2. NO SLOGANS: Ignore mission statements or taglines.
+        3. DESIGNATION: Extract job title.
         
-        SCHEMA:
+        JSON SCHEMA:
         {
           "companyName": "",
           "contactPersonName": "",
           "designation": "",
           "phoneNumbers": [],
           "emails": [],
-          "addresses": [{"street": "House/Road/Plot", "area": "Area", "city": "City"}]
+          "addresses": [{"street": "", "area": "", "city": ""}]
         }
 
         INPUTS:
-        - QR Data: ${qrData || 'N/A'}
-        - OCR Hint: ${fullText || 'N/A'}`,
+        - QR: ${qrData || 'N/A'}
+        - OCR HINT: ${fullText || 'N/A'}`,
         {
           inlineData: {
             data: imageBuffer.toString('base64'),
@@ -148,35 +148,53 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
 
       const result = await model.generateContent(promptParts);
       const response = await result.response;
-      const aiResult = JSON.parse(response.text());
+      const text = response.text();
+      const aiResult = JSON.parse(text);
       
       if (aiResult) {
+        console.log("Gemini AI Parsing successful.");
         return {
           companyName: aiResult.companyName || '',
           contactPersonName: aiResult.contactPersonName || '',
           designation: aiResult.designation || '',
-          phoneNumbers: Array.isArray(aiResult.phoneNumbers) ? aiResult.phoneNumbers.filter(p => p) : [],
-          emails: Array.isArray(aiResult.emails) ? aiResult.emails.filter(e => e) : [],
+          phoneNumbers: Array.isArray(aiResult.phoneNumbers) ? aiResult.phoneNumbers : [],
+          emails: Array.isArray(aiResult.emails) ? aiResult.emails : [],
           addresses: Array.isArray(aiResult.addresses) ? aiResult.addresses : []
         };
       }
     } catch (e) {
-      console.error("Gemini AI Error:", e.message);
+      console.error("Gemini AI Error (404/API), falling back to Local Rules...", e.message);
+      // Logic continues to fallback below
     }
   }
 
-  // --- LOCAL FALLBACK ENGINE (Only if Gemini Fails or is missing) ---
-  console.log("Using Local Rules Engine Fallback...");
+  // --- LOCAL FALLBACK ENGINE (Guaranteed to fill fields if OCR exists) ---
+  console.log("Local Fallback Active. Processing OCR text...");
   const data = { companyName: '', contactPersonName: '', designation: '', phoneNumbers: [], emails: [], addresses: [] };
+  
   if (qrData && qrData.toUpperCase().includes('BEGIN:VCARD')) {
     Object.assign(data, parseVCard(qrData));
   } 
-  const lines = (fullText || '').split('\n').map(l => l.trim()).filter(l => l.length > 1);
-  if (!data.emails.length) data.emails = [...new Set((fullText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []).map(e => e.toLowerCase()))];
-  if (!data.phoneNumbers.length) data.phoneNumbers = [...new Set((fullText.match(/(?:\+|00)?(?:\d[.\s-]?){8,15}/g) || []).map(p => p.trim()))];
-  if (!data.contactPersonName) data.contactPersonName = lines.find(l => /Md\.|Engr\.|Mr\.|Mrs\./i.test(l)) || lines[0] || '';
-  if (!data.companyName) data.companyName = lines.find(l => /Ltd|Limited|Corp|Inc|Group/i.test(l)) || lines[1] || '';
-  if (data.addresses.length === 0 && fullText) data.addresses = [{ street: lines.slice(-2).join(', '), area: '', city: '' }];
+
+  const cleanText = fullText || '';
+  const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 1);
+  
+  if (!data.emails.length) data.emails = [...new Set((cleanText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []).map(e => e.toLowerCase()))];
+  if (!data.phoneNumbers.length) data.phoneNumbers = [...new Set((cleanText.match(/(?:\+|00)?(?:\d[.\s-]?){8,15}/g) || []).map(p => p.trim()))];
+  
+  if (!data.contactPersonName) data.contactPersonName = lines.find(l => /Md\.|Engr\.|Mr\.|Mrs\.|Ms\.|Dr\./i.test(l)) || lines[0] || '';
+  if (!data.companyName) data.companyName = lines.find(l => /Ltd|Limited|Corp|Inc|Group|Pvt/i.test(l)) || lines[1] || '';
+  
+  if (data.addresses.length === 0 && lines.length > 0) {
+    // Take lines that look like addresses or the last few lines
+    const addrLines = lines.filter(l => /Road|Plot|House|Block|Street|Floor|Area|Dhaka/i.test(l));
+    data.addresses = [{ 
+      street: addrLines.length > 0 ? addrLines.join(', ') : lines.slice(-2).join(', '), 
+      area: '', 
+      city: '' 
+    }];
+  }
+
   return data;
 }
 
