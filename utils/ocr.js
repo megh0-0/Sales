@@ -37,8 +37,8 @@ async function extractTextAndRotate(imageSource) {
     // Optimized Buffer for OCR - Essential for speed
     const visionBuffer = await sharp(rawBuffer)
       .rotate()
-      .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 80 })
+      .resize(2500, 2500, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 90 })
       .toBuffer();
 
     let fullText = '';
