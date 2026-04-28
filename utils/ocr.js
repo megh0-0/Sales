@@ -8,7 +8,6 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
  */
 async function extractTextAndRotate(imageSource) {
   const apiKey = process.env.GOOGLE_VISION_API_KEY || process.env.VISION_API_KEY;
-  const hasGemini = !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
 
   try {
     let rawBuffer = null;
@@ -45,20 +44,24 @@ async function extractTextAndRotate(imageSource) {
     let fullText = '';
     let detections = [];
 
-    // ONLY call Vision API if Gemini is NOT available (to save time)
-    if (!hasGemini && apiKey && apiKey !== 'your_vision_api_key') {
-      const base64Image = visionBuffer.toString('base64');
-      const visionUrl = `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`;
-      const payload = {
-        requests: [{
-          image: { content: base64Image },
-          features: [{ type: 'TEXT_DETECTION' }]
-        }]
-      };
-      const response = await axios.post(visionUrl, payload, { timeout: 8000 });
-      const visionData = response.data.responses[0];
-      detections = visionData?.textAnnotations || [];
-      fullText = detections.length > 0 ? detections[0].description : '';
+    // Always try to get text from Vision API as a high-quality fallback/hint
+    if (apiKey && apiKey !== 'your_vision_api_key') {
+      try {
+        const base64Image = visionBuffer.toString('base64');
+        const visionUrl = `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`;
+        const payload = {
+          requests: [{
+            image: { content: base64Image },
+            features: [{ type: 'TEXT_DETECTION' }]
+          }]
+        };
+        const response = await axios.post(visionUrl, payload, { timeout: 8000 });
+        const visionData = response.data.responses[0];
+        detections = visionData?.textAnnotations || [];
+        fullText = detections.length > 0 ? detections[0].description : '';
+      } catch (e) {
+        console.error('Vision API Error:', e.message);
+      }
     }
     
     return { fullText, detections, rotatedImage: visionBuffer, qrData };
@@ -89,12 +92,12 @@ function parseVCard(vcard) {
     else if (key.startsWith('EMAIL')) data.emails.push(val.toLowerCase());
     else if (key.startsWith('ADR')) {
       const adr = val.split(';');
-      // Format: PO Box; Extended; Street; Locality; Region; Postcode; Country
       data.addresses.push({ street: adr[2] || '', area: adr[4] || adr[3] || '', city: adr[5] || adr[3] || '' });
     }
   });
   
   data.phoneNumbers = [...new Set(data.phoneNumbers.filter(p => p.length > 5))];
+  data.emails = [...new Set(data.emails)];
   return data;
 }
 
@@ -144,22 +147,26 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
       ];
 
       const result = await model.generateContent(promptParts);
-      const aiResult = JSON.parse(result.response.text());
+      const response = await result.response;
+      const aiResult = JSON.parse(response.text());
       
-      return {
-        companyName: aiResult.companyName || '',
-        contactPersonName: aiResult.contactPersonName || '',
-        designation: aiResult.designation || '',
-        phoneNumbers: Array.isArray(aiResult.phoneNumbers) ? aiResult.phoneNumbers : [],
-        emails: Array.isArray(aiResult.emails) ? aiResult.emails : [],
-        addresses: Array.isArray(aiResult.addresses) ? aiResult.addresses : []
-      };
+      if (aiResult) {
+        return {
+          companyName: aiResult.companyName || '',
+          contactPersonName: aiResult.contactPersonName || '',
+          designation: aiResult.designation || '',
+          phoneNumbers: Array.isArray(aiResult.phoneNumbers) ? aiResult.phoneNumbers.filter(p => p) : [],
+          emails: Array.isArray(aiResult.emails) ? aiResult.emails.filter(e => e) : [],
+          addresses: Array.isArray(aiResult.addresses) ? aiResult.addresses : []
+        };
+      }
     } catch (e) {
-      console.error("Gemini AI Error, falling back...", e.message);
+      console.error("Gemini AI Error:", e.message);
     }
   }
 
-  // --- LOCAL FALLBACK ENGINE (Only if Gemini Fails) ---
+  // --- LOCAL FALLBACK ENGINE (Only if Gemini Fails or is missing) ---
+  console.log("Using Local Rules Engine Fallback...");
   const data = { companyName: '', contactPersonName: '', designation: '', phoneNumbers: [], emails: [], addresses: [] };
   if (qrData && qrData.toUpperCase().includes('BEGIN:VCARD')) {
     Object.assign(data, parseVCard(qrData));
@@ -169,6 +176,7 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   if (!data.phoneNumbers.length) data.phoneNumbers = [...new Set((fullText.match(/(?:\+|00)?(?:\d[.\s-]?){8,15}/g) || []).map(p => p.trim()))];
   if (!data.contactPersonName) data.contactPersonName = lines.find(l => /Md\.|Engr\.|Mr\.|Mrs\./i.test(l)) || lines[0] || '';
   if (!data.companyName) data.companyName = lines.find(l => /Ltd|Limited|Corp|Inc|Group/i.test(l)) || lines[1] || '';
+  if (data.addresses.length === 0 && fullText) data.addresses = [{ street: lines.slice(-2).join(', '), area: '', city: '' }];
   return data;
 }
 

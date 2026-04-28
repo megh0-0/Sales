@@ -36,7 +36,7 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
       companyName: '', contactPersonName: '', designation: '',
       phoneNumbers: [...new Set(results.flatMap(r => r.phoneNumbers))],
       emails: [...new Set(results.flatMap(r => r.emails))],
-      addresses: results.flatMap(r => r.addresses).filter(a => (a.street || '').length > 2)
+      addresses: results.flatMap(r => r.addresses).filter(a => (a.street || '').length > 0)
     };
 
     // Trust Gemini's results - Only use best-guess logic if fields are empty
@@ -50,7 +50,11 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
     const allDesigs = results.map(r => r.designation).filter(d => d);
     mergedData.designation = allDesigs[0] || '';
 
-    if (mergedData.addresses.length === 0) mergedData.addresses = [{ street: '', area: '', city: '' }];
+    // Final safety check for addresses array
+    if (mergedData.addresses.length === 0) {
+      mergedData.addresses = [{ street: '', area: '', city: '' }];
+    }
+
     res.json({ parsedData: mergedData, rotatedImages });
   } catch (error) { 
     console.error('OCR Endpoint Error:', error);
