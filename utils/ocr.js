@@ -186,11 +186,10 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
     }
   }
 
-  // --- ENHANCED LOCAL FALLBACK ENGINE ---
-  console.log("Using Deep Scan Local Fallback...");
+  // --- ENHANCED BANGLADESH-SPECIFIC LOCAL FALLBACK ENGINE ---
+  console.log("Using Bangladesh-Tuned Local Fallback...");
   const data = { companyName: '', contactPersonName: '', designation: '', phoneNumbers: [], emails: [], addresses: [] };
   
-  // 1. QR Code Fallback (High Quality)
   if (qrData && qrData.toUpperCase().includes('BEGIN:VCARD')) {
     Object.assign(data, parseVCard(qrData));
   } 
@@ -198,37 +197,58 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const cleanText = fullText || '';
   const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   
-  // 2. Email & Phone Extraction (Regex)
+  // 1. Precise Phone Extraction (Bangladesh Standard)
+  if (!data.phoneNumbers.length) {
+    // Matches: 01711XXXXXX, +8801711XXXXXX, 8801711XXXXXX, 02-XXXXXXX (Landline)
+    const bdPhoneRegex = /(?:\+?88)?01[3-9]\d{8}|(?:\+?88)?02\d{6,8}/g;
+    data.phoneNumbers = [...new Set((cleanText.match(bdPhoneRegex) || []).map(p => p.replace(/\s/g, '')))];
+  }
+
+  // 2. Email Extraction
   if (!data.emails.length) {
     data.emails = [...new Set((cleanText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []).map(e => e.toLowerCase()))];
   }
-  if (!data.phoneNumbers.length) {
-    // Matches common international and local formats
-    const phoneRegex = /(?:\+?88)?01[3-9]\d{8}|(?:\+?1|001)?\s?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g;
-    data.phoneNumbers = [...new Set((cleanText.match(phoneRegex) || []).map(p => p.replace(/\s/g, '')))];
-  }
   
-  // 3. Name, Company, and Designation Heuristics
-  const sloganBlacklist = ['Quality', 'Service', 'Since', 'Trust', 'Leading', 'ISO', 'Certified', 'Partner', 'Experience', 'Commitment', 'Excellence', 'Reliable', 'Website', 'Email'];
-  const namePrefixes = ['Md.', 'Engr.', 'Mr.', 'Mrs.', 'Ms.', 'Dr.', 'S.M.', 'Sheikh', 'Mohammad', 'Mohamed'];
-  const companySuffixes = ['Ltd', 'Limited', 'Corp', 'Inc', 'Group', 'Pvt', 'Enterprise', 'Solutions', 'Agency', 'Bank', 'Industries'];
+  // 3. Name, Company, and Designation Heuristics (Bangladesh Focused)
+  const bdNamePrefixes = ['Md.', 'Engr.', 'Mr.', 'Mrs.', 'Ms.', 'Dr.', 'S.M.', 'Sheikh', 'Mohammad', 'Mohamed', 'Mst.', 'Syed', 'Barrister', 'Advocate'];
+  const bdDesignations = ['Manager', 'Director', 'CEO', 'Proprietor', 'Chairman', 'President', 'Engineer', 'Executive', 'AGM', 'DGM', 'GM', 'Partner', 'Owner', 'Consultant', 'Officer', 'In-Charge', 'Head of'];
+  const bdCompanySuffixes = ['Ltd.', 'Limited', 'Group', 'Pvt.', 'Enterprise', 'Solutions', 'Agency', 'Bank', 'Industries', 'Corporation', 'Corp.', 'Mills', 'Textiles', 'Fashion', 'Traders', 'International'];
+  const bdSloganBlacklist = ['Quality', 'Service', 'Since', 'Trust', 'Leading', 'ISO', 'Certified', 'Partner', 'Experience', 'Commitment', 'Excellence', 'Reliable', 'Website', 'Email', 'Hotline', 'Factory', 'Office', 'Branch'];
 
-  const candidateLines = lines.filter(l => !sloganBlacklist.some(s => l.toLowerCase().includes(s.toLowerCase())));
+  const candidateLines = lines.filter(l => !bdSloganBlacklist.some(s => l.toLowerCase().includes(s.toLowerCase())));
 
+  // Heuristic 1: Find Name
   if (!data.contactPersonName) {
-    data.contactPersonName = candidateLines.find(l => namePrefixes.some(p => l.startsWith(p) || l.includes(' ' + p))) || candidateLines[0] || '';
+    data.contactPersonName = candidateLines.find(l => bdNamePrefixes.some(p => l.startsWith(p) || l.includes(' ' + p))) || '';
+    // If no prefix, first line that isn't email/phone/address/company is likely the name
+    if (!data.contactPersonName) {
+      data.contactPersonName = candidateLines.find(l => 
+        !l.includes('@') && !/\d{5,}/.test(l) && !bdCompanySuffixes.some(s => l.includes(s))
+      ) || '';
+    }
   }
 
+  // Heuristic 2: Find Designation
+  if (!data.designation) {
+    data.designation = candidateLines.find(l => bdDesignations.some(d => l.toLowerCase().includes(d.toLowerCase()))) || '';
+  }
+
+  // Heuristic 3: Find Company
   if (!data.companyName) {
-    data.companyName = candidateLines.find(l => companySuffixes.some(s => l.includes(s))) || (candidateLines[1] !== data.contactPersonName ? candidateLines[1] : candidateLines[2]) || '';
+    data.companyName = candidateLines.find(l => bdCompanySuffixes.some(s => l.includes(s))) || '';
+    // Fallback: Check if name was found, try lines near it
+    if (!data.companyName && data.contactPersonName) {
+      const idx = candidateLines.indexOf(data.contactPersonName);
+      data.companyName = candidateLines[idx + 1] || candidateLines[idx + 2] || '';
+    }
   }
 
-  // 4. Address Detection (Contextual)
+  // 4. Address Detection (Bangladesh Specific Keywords)
   if (data.addresses.length === 0 || !data.addresses[0].street) {
-    const addrKeywords = ['Road', 'House', 'Plot', 'Block', 'Floor', 'Avenue', 'Street', 'Building', 'No.', 'Dhaka', 'Chittagong', 'Gulshan', 'Uttara', 'Banani', 'Sector'];
-    const addrLines = candidateLines.filter(l => 
-      (addrKeywords.some(k => l.includes(k)) && /\d/.test(l)) || 
-      /,\s?[A-Z][a-z]+/.test(l) // City-like pattern
+    const bdAddrKeywords = ['Road', 'House', 'Plot', 'Block', 'Floor', 'Avenue', 'Street', 'Building', 'No.', 'Dhaka', 'Chittagong', 'Chattogram', 'Gulshan', 'Uttara', 'Banani', 'Sector', 'Thana', 'District', 'Upazila', 'Vatara', 'Badda', 'Tejgaon', 'Motijheel'];
+    const addrLines = lines.filter(l => 
+      bdAddrKeywords.some(k => l.toLowerCase().includes(k.toLowerCase())) && 
+      (/\d/.test(l) || l.includes(','))
     );
     
     if (addrLines.length > 0) {
@@ -238,7 +258,7 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
 
   if (data.addresses.length === 0) data.addresses = [{ street: '', area: '', city: '' }];
   
-  console.log("[DEBUG] Local Fallback Result:", JSON.stringify(data, null, 2));
+  console.log("[DEBUG] Bangladesh-Tuned Fallback Result:", JSON.stringify(data, null, 2));
   return data;
 }
 
