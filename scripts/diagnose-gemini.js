@@ -14,7 +14,7 @@ async function checkModels() {
     const genAI = new GoogleGenerativeAI(apiKey);
     // There is no direct "listModels" in the simple genAI object, 
     // but we can try a basic fetch to see if the key is valid.
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
     const result = await model.generateContent("test");
     console.log("Direct Test Success!");
   } catch (error) {
