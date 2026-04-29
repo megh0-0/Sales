@@ -110,8 +110,8 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
   if (geminiKey && geminiKey !== 'your_google_api_key' && imageBuffer) {
-    // Increased model diversity and included Pro as a heavy-duty fallback
-    const modelsToTry = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash", "gemini-pro-latest"];
+    // Putting gemini-flash-latest first because 2.5-flash has extremely low quota (5 reqs)
+    const modelsToTry = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-pro-latest", "gemini-2.0-flash"];
     const base64Image = imageBuffer.toString('base64');
     
     // Improved Prompt with Vision Hinting
