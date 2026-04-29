@@ -186,9 +186,11 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
     }
   }
 
-  // --- STRICT LOCAL FALLBACK ENGINE ---
+  // --- ENHANCED LOCAL FALLBACK ENGINE ---
   console.log("Using Deep Scan Local Fallback...");
   const data = { companyName: '', contactPersonName: '', designation: '', phoneNumbers: [], emails: [], addresses: [] };
+  
+  // 1. QR Code Fallback (High Quality)
   if (qrData && qrData.toUpperCase().includes('BEGIN:VCARD')) {
     Object.assign(data, parseVCard(qrData));
   } 
@@ -196,35 +198,47 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const cleanText = fullText || '';
   const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 2);
   
-  // 1. Basic Data (Regex)
-  if (!data.emails.length) data.emails = [...new Set((cleanText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []).map(e => e.toLowerCase()))];
-  if (!data.phoneNumbers.length) data.phoneNumbers = [...new Set((cleanText.match(/(?:\+|00)?(?:\d[.\s-]?){8,15}/g) || []).map(p => p.trim()))];
+  // 2. Email & Phone Extraction (Regex)
+  if (!data.emails.length) {
+    data.emails = [...new Set((cleanText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || []).map(e => e.toLowerCase()))];
+  }
+  if (!data.phoneNumbers.length) {
+    // Matches common international and local formats
+    const phoneRegex = /(?:\+?88)?01[3-9]\d{8}|(?:\+?1|001)?\s?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g;
+    data.phoneNumbers = [...new Set((cleanText.match(phoneRegex) || []).map(p => p.replace(/\s/g, '')))];
+  }
   
-  // 2. Slogan Filtering (Stricter)
-  const sloganBlacklist = ['Quality', 'Service', 'Since', 'Trust', 'Leading', 'ISO', 'Certified', 'Partner', 'World Class', 'Experience', 'Commitment', 'Excellence', 'Best', 'Reliable'];
-  const cleanLines = lines.filter(l => !sloganBlacklist.some(s => l.includes(s)));
+  // 3. Name, Company, and Designation Heuristics
+  const sloganBlacklist = ['Quality', 'Service', 'Since', 'Trust', 'Leading', 'ISO', 'Certified', 'Partner', 'Experience', 'Commitment', 'Excellence', 'Reliable', 'Website', 'Email'];
+  const namePrefixes = ['Md.', 'Engr.', 'Mr.', 'Mrs.', 'Ms.', 'Dr.', 'S.M.', 'Sheikh', 'Mohammad', 'Mohamed'];
+  const companySuffixes = ['Ltd', 'Limited', 'Corp', 'Inc', 'Group', 'Pvt', 'Enterprise', 'Solutions', 'Agency', 'Bank', 'Industries'];
 
-  // 3. Name & Company
-  if (!data.contactPersonName) data.contactPersonName = cleanLines.find(l => /Md\.|Engr\.|Mr\.|Mrs\.|Ms\.|Dr\.|S\.M\.|Sheikh|Mohammad/i.test(l)) || cleanLines[0] || '';
-  if (!data.companyName) data.companyName = cleanLines.find(l => /Ltd|Limited|Corp|Inc|Group|Pvt|Enterprise/i.test(l)) || cleanLines[1] || '';
+  const candidateLines = lines.filter(l => !sloganBlacklist.some(s => l.toLowerCase().includes(s.toLowerCase())));
 
-  // 4. Numeric-Strict Address Detection (Addresses must have a number)
-  if (data.addresses.length === 0) {
-    const addrKeywords = ['Road', 'House', 'Plot', 'Block', 'Floor', 'Avenue', 'Street', 'Building', 'No.', 'Dhaka', 'Chittagong', 'Gulshan', 'Uttara'];
-    const addrLines = cleanLines.filter(l => 
-      addrKeywords.some(k => l.includes(k)) && 
-      /\d/.test(l) && // MUST contain a digit (House #, Road #, etc.)
-      l.length > 8
+  if (!data.contactPersonName) {
+    data.contactPersonName = candidateLines.find(l => namePrefixes.some(p => l.startsWith(p) || l.includes(' ' + p))) || candidateLines[0] || '';
+  }
+
+  if (!data.companyName) {
+    data.companyName = candidateLines.find(l => companySuffixes.some(s => l.includes(s))) || (candidateLines[1] !== data.contactPersonName ? candidateLines[1] : candidateLines[2]) || '';
+  }
+
+  // 4. Address Detection (Contextual)
+  if (data.addresses.length === 0 || !data.addresses[0].street) {
+    const addrKeywords = ['Road', 'House', 'Plot', 'Block', 'Floor', 'Avenue', 'Street', 'Building', 'No.', 'Dhaka', 'Chittagong', 'Gulshan', 'Uttara', 'Banani', 'Sector'];
+    const addrLines = candidateLines.filter(l => 
+      (addrKeywords.some(k => l.includes(k)) && /\d/.test(l)) || 
+      /,\s?[A-Z][a-z]+/.test(l) // City-like pattern
     );
     
     if (addrLines.length > 0) {
-      addrLines.forEach(line => data.addresses.push({ street: line, area: '', city: '' }));
-    } else if (cleanLines.length > 2) {
-      data.addresses = [{ street: cleanLines.slice(-2).join(', '), area: '', city: '' }];
+      data.addresses = [{ street: addrLines.join(', '), area: '', city: '' }];
     }
   }
 
   if (data.addresses.length === 0) data.addresses = [{ street: '', area: '', city: '' }];
+  
+  console.log("[DEBUG] Local Fallback Result:", JSON.stringify(data, null, 2));
   return data;
 }
 
