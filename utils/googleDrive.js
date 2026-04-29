@@ -100,7 +100,12 @@ async function uploadToDrive(fileSource, fileName, mimeType, customParentId = nu
 
     return `https://drive.google.com/uc?export=view&id=${fileId}`;
   } catch (error) {
-    console.error('Personal Drive Upload Error:', error.message);
+    if (error.message.includes('invalid_grant')) {
+      console.error('CRITICAL: Google Drive Refresh Token is invalid or expired (invalid_grant).');
+      console.error('Please re-authorize the application via OAuth Playground and update GOOGLE_REFRESH_TOKEN.');
+    } else {
+      console.error('Personal Drive Upload Error:', error.message);
+    }
     throw error;
   }
 }
