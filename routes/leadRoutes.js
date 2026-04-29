@@ -55,6 +55,8 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
       mergedData.addresses = [{ street: '', area: '', city: '' }];
     }
 
+    console.log('[DEBUG] Final Merged OCR Data:', JSON.stringify(mergedData, null, 2));
+
     res.json({ parsedData: mergedData, rotatedImages });
   } catch (error) { 
     console.error('OCR Endpoint Error:', error);

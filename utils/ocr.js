@@ -37,8 +37,8 @@ async function extractTextAndRotate(imageSource) {
     // Optimized Buffer for OCR - Essential for speed
     const visionBuffer = await sharp(rawBuffer)
       .rotate()
-      .resize(2500, 2500, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 90 })
+      .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80 })
       .toBuffer();
 
     let fullText = '';
@@ -110,7 +110,7 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
   if (geminiKey && geminiKey !== 'your_google_api_key' && imageBuffer) {
-    const modelsToTry = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-flash-latest"];
+    const modelsToTry = ["gemini-2.0-flash", "gemini-1.5-flash-latest"];
     const base64Image = imageBuffer.toString('base64');
 
     for (const modelName of modelsToTry) {
@@ -129,18 +129,34 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
           generationConfig: { response_mime_type: "application/json" }
         };
 
-        const response = await axios.post(url, payload, { timeout: 15000 });
+        const response = await axios.post(url, payload, { timeout: 10000 });
         let aiText = response.data.candidates[0].content.parts[0].text;
         
+        console.log(`[DEBUG] Raw AI Response from ${modelName}:`, aiText);
+
         // Clean up markdown code blocks if present
         if (aiText.includes('```')) {
           aiText = aiText.replace(/```json|```/g, '').trim();
         }
 
-        const aiResult = JSON.parse(aiText);
+        let aiResult = null;
+        try {
+          aiResult = JSON.parse(aiText);
+        } catch (parseError) {
+          console.error(`[DEBUG] JSON.parse failed for ${modelName}, attempting regex extraction...`);
+          const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            try {
+              aiResult = JSON.parse(jsonMatch[0]);
+            } catch (retryError) {
+              console.error(`[DEBUG] Regex JSON extraction also failed for ${modelName}`);
+            }
+          }
+        }
 
         if (aiResult) {
           console.log(`Gemini AI (${modelName}) REST Success.`);
+          console.log(`[DEBUG] Parsed Result:`, JSON.stringify(aiResult, null, 2));
           return {
             companyName: aiResult.companyName || '',
             contactPersonName: aiResult.contactPersonName || '',
@@ -153,6 +169,9 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
       } catch (e) {
         const errorDetail = e.response?.data?.error?.message || e.message;
         console.error(`${modelName} REST failed: ${errorDetail}`);
+        if (e.response?.data) {
+          console.error(`[DEBUG] Full Error Response:`, JSON.stringify(e.response.data, null, 2));
+        }
         // Continue to next model or fallback
       }
     }
