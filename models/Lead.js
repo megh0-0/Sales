@@ -23,8 +23,8 @@ const leadSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Lead generated', 'Potential', 'Quotation submitted', 'On going negotiation', 'Sales Complete'],
-    default: 'Lead generated'
+    enum: ['Lead Generated', 'Potential', 'Inquiry Collected', 'Quotation Submitted', 'Negotiation', 'Sales Complete', 'Rejected'],
+    default: 'Lead Generated'
   },
 
   // 2. Requirement Information (Optional)
