@@ -110,69 +110,78 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
   if (geminiKey && geminiKey !== 'your_google_api_key' && imageBuffer) {
-    const modelsToTry = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"];
+    // Increased model diversity and included Pro as a heavy-duty fallback
+    const modelsToTry = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash", "gemini-pro-latest"];
     const base64Image = imageBuffer.toString('base64');
+    
+    // Improved Prompt with Vision Hinting
+    const promptText = `EXTRACT BUSINESS CARD DATA. 
+    JSON ONLY. NO SLOGANS. 
+    
+    HINT FROM VISION OCR: ${fullText || 'No text detected by local OCR.'}
+    
+    SCHEMA: {"companyName":"","contactPersonName":"","designation":"","phoneNumbers":[],"emails":[],"addresses":[{"street":"","area":"","city":""}]}`;
 
     for (const modelName of modelsToTry) {
       console.log(`Attempting Gemini AI via REST (${modelName})...`);
-      try {
-        // Using Manual REST API call to bypass SDK 404 bugs
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiKey}`;
-        
-        const payload = {
-          contents: [{
-            parts: [
-              { text: "EXTRACT BUSINESS CARD DATA. JSON ONLY. NO SLOGANS. SCHEMA: {\"companyName\":\"\",\"contactPersonName\":\"\",\"designation\":\"\",\"phoneNumbers\":[],\"emails\":[],\"addresses\":[{\"street\":\"\",\"area\":\"\",\"city\":\"\"}]}" },
-              { inline_data: { mime_type: "image/jpeg", data: base64Image } }
-            ]
-          }],
-          generationConfig: { response_mime_type: "application/json" }
-        };
-
-        const response = await axios.post(url, payload, { timeout: 10000 });
-        let aiText = response.data.candidates[0].content.parts[0].text;
-        
-        console.log(`[DEBUG] Raw AI Response from ${modelName}:`, aiText);
-
-        // Clean up markdown code blocks if present
-        if (aiText.includes('```')) {
-          aiText = aiText.replace(/```json|```/g, '').trim();
-        }
-
-        let aiResult = null;
+      
+      // Retry Logic for 503/429
+      let lastError = null;
+      for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          aiResult = JSON.parse(aiText);
-        } catch (parseError) {
-          console.error(`[DEBUG] JSON.parse failed for ${modelName}, attempting regex extraction...`);
-          const jsonMatch = aiText.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            try {
-              aiResult = JSON.parse(jsonMatch[0]);
-            } catch (retryError) {
-              console.error(`[DEBUG] Regex JSON extraction also failed for ${modelName}`);
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiKey}`;
+          
+          const payload = {
+            contents: [{
+              parts: [
+                { text: promptText },
+                { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+              ]
+            }],
+            generationConfig: { 
+              response_mime_type: "application/json",
+              temperature: 0.1 
             }
-          }
-        }
-
-        if (aiResult) {
-          console.log(`Gemini AI (${modelName}) REST Success.`);
-          console.log(`[DEBUG] Parsed Result:`, JSON.stringify(aiResult, null, 2));
-          return {
-            companyName: aiResult.companyName || '',
-            contactPersonName: aiResult.contactPersonName || '',
-            designation: aiResult.designation || '',
-            phoneNumbers: Array.isArray(aiResult.phoneNumbers) ? aiResult.phoneNumbers : [],
-            emails: Array.isArray(aiResult.emails) ? aiResult.emails : [],
-            addresses: Array.isArray(aiResult.addresses) ? aiResult.addresses : []
           };
+
+          const response = await axios.post(url, payload, { timeout: 15000 });
+          let aiText = response.data.candidates[0].content.parts[0].text;
+          
+          console.log(`[DEBUG] Raw AI Response from ${modelName}:`, aiText);
+
+          if (aiText.includes('```')) {
+            aiText = aiText.replace(/```json|```/g, '').trim();
+          }
+
+          let aiResult = JSON.parse(aiText);
+
+          if (aiResult) {
+            console.log(`Gemini AI (${modelName}) REST Success.`);
+            return {
+              companyName: aiResult.companyName || '',
+              contactPersonName: aiResult.contactPersonName || '',
+              designation: aiResult.designation || '',
+              phoneNumbers: Array.isArray(aiResult.phoneNumbers) ? aiResult.phoneNumbers : [],
+              emails: Array.isArray(aiResult.emails) ? aiResult.emails : [],
+              addresses: Array.isArray(aiResult.addresses) ? aiResult.addresses : []
+            };
+          }
+        } catch (e) {
+          const status = e.response?.status;
+          const errorDetail = e.response?.data?.error?.message || e.message;
+          lastError = errorDetail;
+
+          // If 503 (High Demand) or 429 (Quota), retry with delay
+          if ((status === 503 || status === 429) && attempt < 2) {
+            const delay = attempt * 1500;
+            console.warn(`[RETRY] ${modelName} hit ${status}. Retrying in ${delay}ms... (Attempt ${attempt}/2)`);
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+          }
+          
+          console.error(`${modelName} REST failed: ${errorDetail}`);
+          break; // Move to next model
         }
-      } catch (e) {
-        const errorDetail = e.response?.data?.error?.message || e.message;
-        console.error(`${modelName} REST failed: ${errorDetail}`);
-        if (e.response?.data) {
-          console.error(`[DEBUG] Full Error Response:`, JSON.stringify(e.response.data, null, 2));
-        }
-        // Continue to next model or fallback
       }
     }
   }
