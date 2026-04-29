@@ -1,17 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { UserPlus, Plus, Trash2, Edit, Save, X, Key, Check, Users, Loader2 } from 'lucide-react';
+import { 
+  Plus, Trash2, Edit3, Key, 
+  Users, Loader2, Zap, ArrowLeft, Target, Calendar, User as UserIcon, Camera
+} from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { clsx } from 'clsx';
+import { format } from 'date-fns';
 
 const Settings = () => {
-  const [activeTab, setActiveTab] = useState<'employees' | 'industries'>('employees');
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<'employees' | 'industries' | 'supplements'>('employees');
   const [users, setUsers] = useState<any[]>([]);
   const [industries, setIndustries] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [btnLoading, setBtnLoading] = useState(false);
   
-  // User Form State
-  const [userForm, setUserForm] = useState({
+  const [userForm, setUserForm] = useState<any>({
     name: '',
     phone: '',
     email: '',
@@ -19,12 +24,18 @@ const Settings = () => {
     role: 'Employee',
     password: '',
     joiningDate: '',
-    isActive: true
+    resignationDate: '',
+    monthlyTarget: 0,
+    isActive: true,
+    managers: []
   });
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [visitingCardFile, setVisitingCardFile] = useState<File | null>(null);
 
-  // Industry Form State
   const [newIndustry, setNewIndustry] = useState('');
+  const [supplements, setSupplements] = useState<any[]>([]);
+  const [newSupplementName, setNewSupplementName] = useState('');
+  const [supplementFile, setSupplementFile] = useState<File | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -33,12 +44,14 @@ const Settings = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [usersRes, indRes] = await Promise.all([
+      const [usersRes, indRes, supRes] = await Promise.all([
         axios.get(`${import.meta.env.VITE_API_URL}/users`),
-        axios.get(`${import.meta.env.VITE_API_URL}/industries`)
+        axios.get(`${import.meta.env.VITE_API_URL}/industries`),
+        axios.get(`${import.meta.env.VITE_API_URL}/supplements`)
       ]);
-      setUsers(usersRes.data);
-      setIndustries(indRes.data);
+      setUsers(usersRes.data || []);
+      setIndustries(indRes.data || []);
+      setSupplements(supRes.data || []);
     } catch (err) {
       console.error('Failed to fetch settings data');
     } finally {
@@ -49,11 +62,25 @@ const Settings = () => {
   const handleUserSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBtnLoading(true);
+    
+    const formData = new FormData();
+    Object.keys(userForm).forEach(key => {
+      if (key === 'managers') {
+        formData.append(key, JSON.stringify(userForm[key] || []));
+      } else if (userForm[key] !== null && userForm[key] !== undefined) {
+        formData.append(key, userForm[key]);
+      }
+    });
+    
+    if (visitingCardFile) {
+      formData.append('visitingCard', visitingCardFile);
+    }
+
     try {
       if (editingUserId) {
-        await axios.put(`${import.meta.env.VITE_API_URL}/users/${editingUserId}`, userForm);
+        await axios.put(`${import.meta.env.VITE_API_URL}/users/${editingUserId}`, formData);
       } else {
-        await axios.post(`${import.meta.env.VITE_API_URL}/users`, userForm);
+        await axios.post(`${import.meta.env.VITE_API_URL}/users`, formData);
       }
       resetUserForm();
       fetchData();
@@ -65,17 +92,22 @@ const Settings = () => {
   };
 
   const editUser = (user: any) => {
+    if (!user) return;
     setEditingUserId(user._id);
     setUserForm({
-      name: user.name,
-      phone: user.phone,
+      name: user.name || '',
+      phone: user.phone || '',
       email: user.email || '',
       designation: user.designation || '',
-      role: user.role,
-      password: '', // Don't show existing password
+      role: user.role || 'Employee',
+      password: '',
       joiningDate: user.joiningDate ? user.joiningDate.split('T')[0] : '',
-      isActive: user.isActive
+      resignationDate: user.resignationDate ? user.resignationDate.split('T')[0] : '',
+      monthlyTarget: user.monthlyTarget || 0,
+      isActive: user.isActive !== undefined ? user.isActive : true,
+      managers: user.managers?.map((m: any) => typeof m === 'object' ? m?._id : m).filter(Boolean) || []
     });
+    setVisitingCardFile(null);
     window.scrollTo(0, 0);
   };
 
@@ -83,21 +115,21 @@ const Settings = () => {
     setEditingUserId(null);
     setUserForm({
       name: '', phone: '', email: '', designation: '',
-      role: 'Employee', password: '', joiningDate: '', isActive: true
+      role: 'Employee', password: '', joiningDate: '', resignationDate: '',
+      monthlyTarget: 0, isActive: true, managers: []
     });
+    setVisitingCardFile(null);
   };
 
-  const handleIndustrySubmit = async (e: React.FormEvent) => {
+  const handleAddIndustry = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newIndustry.trim()) return;
-    
     setBtnLoading(true);
     try {
       await axios.post(`${import.meta.env.VITE_API_URL}/industries`, { name: newIndustry.trim() });
       setNewIndustry('');
-      // Manually update list or refetch
       const res = await axios.get(`${import.meta.env.VITE_API_URL}/industries`);
-      setIndustries(res.data);
+      setIndustries(res.data || []);
     } catch (err: any) {
       alert(err.response?.data?.message || 'Failed to add industry');
     } finally {
@@ -105,174 +137,323 @@ const Settings = () => {
     }
   };
 
-  const deleteIndustry = async (id: string) => {
-    if (!confirm('Are you sure?')) return;
+  const handleDeleteIndustry = async (id: string) => {
+    if (!window.confirm('Delete this industry category?')) return;
     try {
       await axios.delete(`${import.meta.env.VITE_API_URL}/industries/${id}`);
-      setIndustries(prev => prev.filter(i => i._id !== id));
+      setIndustries(prev => prev.filter(ind => ind._id !== id));
     } catch (err) {
       alert('Failed to delete industry');
     }
   };
 
-  return (
-    <div className="max-w-6xl mx-auto pb-20 px-2 sm:px-4">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Settings</h1>
+  const handleAddSupplement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supplementFile) return;
+    setBtnLoading(true);
+    const formData = new FormData();
+    formData.append('name', newSupplementName || supplementFile.name);
+    formData.append('file', supplementFile);
 
-      <div className="flex border-b border-gray-200 mb-8 overflow-x-auto no-scrollbar">
+    try {
+      await axios.post(`${import.meta.env.VITE_API_URL}/supplements`, formData);
+      setNewSupplementName('');
+      setSupplementFile(null);
+      const res = await axios.get(`${import.meta.env.VITE_API_URL}/supplements`);
+      setSupplements(res.data || []);
+    } catch (err) {
+      alert('Failed to upload supplement');
+    } finally {
+      setBtnLoading(false);
+    }
+  };
+
+  const handleDeleteSupplement = async (id: string) => {
+    if (!window.confirm('Delete this supplement document?')) return;
+    try {
+      await axios.delete(`${import.meta.env.VITE_API_URL}/supplements/${id}`);
+      setSupplements(prev => prev.filter(s => s._id !== id));
+    } catch (err) {
+      alert('Failed to delete supplement');
+    }
+  };
+
+  if (loading) return (
+    <div className="flex justify-center py-20">
+      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+    </div>
+  );
+
+  return (
+    <div className="max-w-6xl mx-auto pb-20 px-4">
+      <div className="flex items-center gap-4 mb-8">
+        <button onClick={() => navigate('/')} className="p-2.5 bg-white border border-gray-200 rounded-xl text-gray-500 hover:bg-gray-50 transition-colors shadow-sm"><ArrowLeft className="w-4 h-4" /></button>
+        <h1 className="text-2xl font-black text-gray-900 tracking-tighter uppercase italic">Settings</h1>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex items-center gap-8 border-b border-gray-100 mb-10 overflow-x-auto no-scrollbar">
         <button
           onClick={() => setActiveTab('employees')}
           className={clsx(
-            'px-4 sm:px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap',
-            activeTab === 'employees' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+            'flex items-center gap-2 pb-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all whitespace-nowrap',
+            activeTab === 'employees' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'
           )}
         >
-          <div className="flex items-center"><Users className="w-4 h-4 mr-2" /> Employees</div>
+          <Users className="w-4 h-4" /> Employees
         </button>
         <button
           onClick={() => setActiveTab('industries')}
           className={clsx(
-            'px-4 sm:px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap',
-            activeTab === 'industries' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+            'flex items-center gap-2 pb-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all whitespace-nowrap',
+            activeTab === 'industries' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'
           )}
         >
-          <div className="flex items-center"><Plus className="w-4 h-4 mr-2" /> Industries</div>
+          <Plus className="w-4 h-4" /> Industries
+        </button>
+        <button
+          onClick={() => setActiveTab('supplements')}
+          className={clsx(
+            'flex items-center gap-2 pb-4 text-xs font-black uppercase tracking-widest border-b-2 transition-all whitespace-nowrap',
+            activeTab === 'supplements' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'
+          )}
+        >
+          <Zap className="w-4 h-4" /> Supplements
         </button>
       </div>
 
       {activeTab === 'employees' ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* User Form */}
-          <div className="lg:col-span-1">
-            <div className="bg-white shadow-sm border border-gray-100 rounded-2xl overflow-hidden sticky top-24">
-              <div className="px-6 py-4 bg-gray-50 border-b border-gray-100">
-                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider">
-                  {editingUserId ? 'Edit Employee' : 'Add New Employee'}
-                </h3>
-              </div>
-              <form onSubmit={handleUserSubmit} className="p-6 space-y-5">
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Full Name</label>
-                  <input type="text" required value={userForm.name} onChange={(e) => setUserForm({...userForm, name: e.target.value})} className="mt-1 block w-full border border-gray-300 rounded-xl py-2.5 px-4 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white" />
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Phone (ID)</label>
-                    <input type="tel" required value={userForm.phone} onChange={(e) => setUserForm({...userForm, phone: e.target.value})} className="mt-1 block w-full border border-gray-300 rounded-xl py-2.5 px-4 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white" />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+          {/* Add Employee Form */}
+          <div className="space-y-6">
+            <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-4">{editingUserId ? 'Update Profile' : 'Add New Employee'}</h3>
+            <form onSubmit={handleUserSubmit} className="space-y-6">
+               <div className="space-y-1">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Full Name</label>
+                  <input type="text" required value={userForm.name} onChange={(e) => setUserForm({...userForm, name: e.target.value})} className="w-full bg-white border border-gray-200 rounded-xl p-3.5 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" />
+               </div>
+               <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Phone (ID)</label>
+                    <input type="tel" required value={userForm.phone} onChange={(e) => setUserForm({...userForm, phone: e.target.value})} className="w-full bg-white border border-gray-200 rounded-xl p-3.5 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" />
                   </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Designation</label>
-                    <input type="text" value={userForm.designation} onChange={(e) => setUserForm({...userForm, designation: e.target.value})} className="mt-1 block w-full border border-gray-300 rounded-xl py-2.5 px-4 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white" />
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Designation</label>
+                    <input type="text" value={userForm.designation} onChange={(e) => setUserForm({...userForm, designation: e.target.value})} className="w-full bg-white border border-gray-200 rounded-xl p-3.5 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" />
                   </div>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Email Address</label>
-                  <input type="email" value={userForm.email} onChange={(e) => setUserForm({...userForm, email: e.target.value})} className="mt-1 block w-full border border-gray-300 rounded-xl py-2.5 px-4 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white" />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Role</label>
-                    <select value={userForm.role} onChange={(e) => setUserForm({...userForm, role: e.target.value})} className="mt-1 block w-full border border-gray-300 rounded-xl py-2.5 px-4 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white">
+               </div>
+               <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Email Address</label>
+                    <input type="email" value={userForm.email} onChange={(e) => setUserForm({...userForm, email: e.target.value})} className="w-full bg-white border border-gray-200 rounded-xl p-3.5 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Monthly Target (BDT)</label>
+                    <div className="relative">
+                      <Target className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-300" />
+                      <input type="number" value={userForm.monthlyTarget} onChange={(e) => setUserForm({...userForm, monthlyTarget: Number(e.target.value)})} className="w-full pl-10 bg-white border border-gray-200 rounded-xl p-3.5 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" />
+                    </div>
+                  </div>
+               </div>
+               <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Role</label>
+                    <select value={userForm.role} onChange={(e) => setUserForm({...userForm, role: e.target.value})} className="w-full bg-white border border-gray-200 rounded-xl p-3.5 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none">
                       <option value="Employee">Employee</option>
                       <option value="Manager">Manager</option>
                       <option value="Admin">Admin</option>
                       <option value="Owner">Owner</option>
                     </select>
                   </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Status</label>
-                    <select value={userForm.isActive ? 'active' : 'inactive'} onChange={(e) => setUserForm({...userForm, isActive: e.target.value === 'active'})} className="mt-1 block w-full border border-gray-300 rounded-xl py-2.5 px-4 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Status</label>
+                    <select value={userForm.isActive ? 'active' : 'inactive'} onChange={(e) => setUserForm({...userForm, isActive: e.target.value === 'active'})} className="w-full bg-white border border-gray-200 rounded-xl p-3.5 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none">
                       <option value="active">Active</option>
                       <option value="inactive">Inactive</option>
                     </select>
                   </div>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">{editingUserId ? 'Change Password' : 'Set Password'}</label>
-                  <div className="relative mt-1">
-                    <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                    <input type="password" placeholder={editingUserId ? "Leave blank to keep" : "••••••••"} required={!editingUserId} value={userForm.password} onChange={(e) => setUserForm({...userForm, password: e.target.value})} className="pl-10 block w-full border border-gray-300 rounded-xl py-2.5 px-4 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white" />
+               </div>
+               <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Joining Date</label>
+                    <input type="date" value={userForm.joiningDate} onChange={(e) => setUserForm({...userForm, joiningDate: e.target.value})} className="w-full bg-white border border-gray-200 rounded-xl p-3.5 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" />
                   </div>
-                </div>
-                <div className="flex flex-col sm:flex-row gap-3 pt-4">
-                  <button type="submit" disabled={btnLoading} className="flex-1 bg-blue-600 text-white rounded-xl py-3 text-sm font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 disabled:opacity-50 flex items-center justify-center">
-                    {btnLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : (editingUserId ? 'Update Profile' : 'Create Account')}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Resignation Date</label>
+                    <input type="date" value={userForm.resignationDate} onChange={(e) => setUserForm({...userForm, resignationDate: e.target.value})} className="w-full bg-white border border-gray-200 rounded-xl p-3.5 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" />
+                  </div>
+               </div>
+
+               <div className="space-y-1">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Assign Managers</label>
+                  <select 
+                    multiple
+                    value={userForm.managers || []}
+                    onChange={(e) => {
+                      const values = Array.from(e.target.selectedOptions, option => option.value);
+                      setUserForm({...userForm, managers: values});
+                    }}
+                    className="w-full bg-white border border-gray-200 rounded-xl p-3 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none h-32"
+                  >
+                    {users.filter(u => u && u._id !== editingUserId && ['Manager', 'Admin', 'Owner'].includes(u.role)).map(u => (
+                      <option key={u._id} value={u._id} className="p-2 border-b border-gray-50">{u.name} ({u.role})</option>
+                    ))}
+                  </select>
+                  <p className="text-[8px] font-bold text-gray-400 uppercase ml-1 mt-1 mt-1">Hold Ctrl (Cmd) to select multiple managers.</p>
+               </div>
+
+               <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Set Password</label>
+                    <div className="relative">
+                      <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-300" />
+                      <input type="password" required={!editingUserId} value={userForm.password} onChange={(e) => setUserForm({...userForm, password: e.target.value})} className="w-full pl-10 bg-white border border-gray-200 rounded-xl p-3.5 text-sm font-bold focus:ring-2 focus:ring-blue-500 outline-none" />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Visiting Card</label>
+                    <label className="flex items-center gap-2 p-3 bg-gray-50 border border-dashed border-gray-300 rounded-xl cursor-pointer hover:bg-gray-100 transition-colors">
+                       <Camera className="w-4 h-4 text-gray-400" />
+                       <span className="text-[10px] font-bold text-gray-500 uppercase truncate">
+                          {visitingCardFile ? visitingCardFile.name : 'Upload Card'}
+                       </span>
+                       <input type="file" className="hidden" onChange={(e) => setVisitingCardFile(e.target.files?.[0] || null)} />
+                    </label>
+                  </div>
+               </div>
+
+               <div className="flex gap-4">
+                  <button type="submit" disabled={btnLoading} className="flex-1 bg-blue-600 text-white rounded-2xl py-4 text-sm font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 disabled:opacity-50">
+                    {btnLoading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : (editingUserId ? 'Update Profile' : 'Create Account')}
                   </button>
                   {editingUserId && (
-                    <button type="button" onClick={resetUserForm} className="bg-gray-100 text-gray-600 rounded-xl py-3 px-6 text-sm font-bold hover:bg-gray-200 transition-all">
+                    <button type="button" onClick={resetUserForm} className="px-8 bg-gray-100 text-gray-500 rounded-2xl py-4 text-sm font-black uppercase tracking-widest hover:bg-gray-200 transition-all">
                       Cancel
                     </button>
                   )}
-                </div>
-              </form>
-            </div>
+               </div>
+            </form>
           </div>
 
-          {/* User List */}
-          <div className="lg:col-span-2">
-            <div className="bg-white shadow-sm border border-gray-100 rounded-2xl overflow-hidden">
-              <ul className="divide-y divide-gray-100">
-                {users.map((u) => (
-                  <li key={u._id} className="px-6 py-5 hover:bg-gray-50/50 transition-colors">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center min-w-0">
-                        <div className={clsx(
-                          "w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-xl flex-shrink-0 shadow-sm",
-                          u.role === 'Admin' || u.role === 'Owner' ? 'bg-indigo-500' : 'bg-blue-500'
-                        )}>
-                          {u.name.charAt(0)}
-                        </div>
-                        <div className="ml-4 min-w-0">
-                          <p className="text-sm font-bold text-gray-900 truncate">{u.name}</p>
-                          <p className="text-[11px] text-gray-500 font-medium uppercase tracking-wider">{u.phone} • {u.role}</p>
-                        </div>
+          {/* Employee List */}
+          <div className="space-y-4">
+             {users.map((u) => u && (
+                <div key={u._id} className="bg-white p-5 rounded-3xl border border-gray-50 shadow-sm flex items-center justify-between group hover:border-blue-100 transition-all">
+                   <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-2xl bg-blue-600 text-white flex items-center justify-center font-black text-xl shadow-lg shadow-blue-50 overflow-hidden">
+                        {u.visitingCard ? <img src={u.visitingCard} className="w-full h-full object-cover" /> : (u.name ? u.name.charAt(0) : '?')}
                       </div>
-                      <div className="flex items-center gap-4 ml-4">
-                        <span className={clsx(
-                          "px-3 py-1 text-[9px] font-extrabold uppercase rounded-full tracking-widest",
-                          u.isActive ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                        )}>
-                          {u.isActive ? 'Active' : 'Inactive'}
-                        </span>
-                        <button onClick={() => editUser(u)} className="p-2 text-gray-400 hover:text-blue-600 bg-gray-50 rounded-lg transition-colors"><Edit className="w-4 h-4" /></button>
+                      <div>
+                        <p className="text-sm font-black text-gray-900 leading-none mb-1 uppercase tracking-tight">{u.name}</p>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{u.phone} • {u.role}</p>
+                        <p className="text-[9px] font-black text-blue-600 uppercase mt-0.5">Target: ৳{u.monthlyTarget?.toLocaleString()}</p>
                       </div>
-                    </div>
-                  </li>
-                ))}
-                {users.length === 0 && <li className="px-6 py-12 text-center text-gray-400 italic">No employees found.</li>}
-              </ul>
-            </div>
+                   </div>
+                   <div className="flex items-center gap-4">
+                      <span className={clsx(
+                        "px-3 py-1 text-[8px] font-black uppercase rounded-full tracking-widest",
+                        u.isActive ? "bg-emerald-50 text-emerald-600" : "bg-red-50 text-red-600"
+                      )}>
+                        {u.isActive ? 'Active' : 'Inactive'}
+                      </span>
+                      <button onClick={() => editUser(u)} className="p-2 text-gray-300 hover:text-blue-600 transition-colors">
+                        <Edit3 className="w-4 h-4" />
+                      </button>
+                   </div>
+                </div>
+             ))}
           </div>
         </div>
+      ) : activeTab === 'industries' ? (
+        <div className="max-w-2xl space-y-8">
+           <form onSubmit={handleAddIndustry} className="flex gap-4">
+              <input 
+                type="text" 
+                value={newIndustry} 
+                onChange={(e) => setNewIndustry(e.target.value)} 
+                placeholder="Industry name..." 
+                className="flex-1 bg-white border border-gray-200 rounded-xl px-5 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500" 
+              />
+              <button 
+                type="submit"
+                disabled={btnLoading}
+                className="bg-blue-600 text-white px-8 rounded-xl font-black uppercase text-xs tracking-widest shadow-lg shadow-blue-100 disabled:opacity-50"
+              >
+                {btnLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Add Category'}
+              </button>
+           </form>
+           <div className="bg-white rounded-[2rem] border border-gray-50 shadow-sm overflow-hidden">
+              <div className="p-6 bg-gray-50 border-b border-gray-50 text-[9px] font-black text-gray-400 uppercase tracking-widest">Configured Industries</div>
+              <div className="divide-y divide-gray-50">
+                 {industries.map(ind => ind && (
+                    <div key={ind._id} className="p-5 px-6 flex items-center justify-between hover:bg-gray-50/50 transition-colors font-black text-sm text-gray-900 uppercase tracking-tight">
+                       {ind.name}
+                       <button 
+                        onClick={() => handleDeleteIndustry(ind._id)}
+                        className="text-gray-300 hover:text-red-500 transition-colors"
+                       >
+                         <Trash2 className="w-4 h-4" />
+                       </button>
+                    </div>
+                 ))}
+              </div>
+           </div>
+        </div>
       ) : (
-        <div className="max-w-2xl">
-          <form onSubmit={handleIndustrySubmit} className="mb-8 flex flex-col sm:flex-row gap-3">
-            <input
-              type="text"
-              placeholder="E.g. Real Estate, Tech, HVAC..."
-              value={newIndustry}
-              onChange={(e) => setNewIndustry(e.target.value)}
-              className="flex-1 border border-gray-300 rounded-xl py-3 px-4 text-sm focus:ring-blue-500 focus:border-blue-500 bg-white shadow-sm"
-            />
-            <button type="submit" disabled={btnLoading} className="bg-blue-600 text-white rounded-xl py-3 px-8 text-sm font-bold hover:bg-blue-700 transition-all flex items-center justify-center shadow-lg shadow-blue-100 disabled:opacity-50">
-              {btnLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <><Plus className="w-4 h-4 mr-2" /> Add Category</>}
-            </button>
-          </form>
+        <div className="max-w-4xl space-y-8">
+           <form onSubmit={handleAddSupplement} className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm space-y-6">
+              <h3 className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Upload New Document</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                 <div className="space-y-1">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Document Name</label>
+                    <input 
+                      type="text" 
+                      value={newSupplementName} 
+                      onChange={(e) => setNewSupplementName(e.target.value)} 
+                      placeholder="e.g. Profile 2026"
+                      className="w-full bg-gray-50 border border-gray-100 rounded-xl px-5 py-3 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500" 
+                    />
+                 </div>
+                 <div className="space-y-1">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Select File</label>
+                    <input 
+                      type="file" 
+                      onChange={(e) => setSupplementFile(e.target.files?.[0] || null)} 
+                      className="w-full bg-gray-50 border border-gray-100 rounded-xl px-5 py-2.5 text-xs font-bold outline-none focus:ring-2 focus:ring-blue-500" 
+                    />
+                 </div>
+              </div>
+              <button 
+                type="submit"
+                disabled={btnLoading || !supplementFile}
+                className="w-full bg-blue-600 text-white py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-lg shadow-blue-100 disabled:opacity-50"
+              >
+                {btnLoading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : 'Upload Asset'}
+              </button>
+           </form>
 
-          <div className="bg-white shadow-sm border border-gray-100 rounded-2xl overflow-hidden">
-            <div className="px-6 py-4 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-              Configured Industries
-            </div>
-            <ul className="divide-y divide-gray-100">
-              {industries.map((ind) => (
-                <li key={ind._id} className="px-6 py-4 flex items-center justify-between hover:bg-gray-50/50 transition-colors">
-                  <span className="text-sm font-bold text-gray-900">{ind.name}</span>
-                  <button onClick={() => deleteIndustry(ind._id)} className="p-2 text-gray-400 hover:text-red-600 bg-gray-50 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
-                </li>
-              ))}
-              {industries.length === 0 && <li className="px-6 py-12 text-center text-gray-400 italic">No categories added yet.</li>}
-            </ul>
-          </div>
+           <div className="bg-white rounded-[2rem] border border-gray-50 shadow-sm overflow-hidden">
+              <div className="p-6 bg-gray-50 border-b border-gray-50 text-[9px] font-black text-gray-400 uppercase tracking-widest">Available Supplements</div>
+              <div className="divide-y divide-gray-50">
+                 {supplements.map(sup => sup && (
+                    <div key={sup._id} className="p-5 px-6 flex items-center justify-between hover:bg-gray-50/50 transition-colors">
+                       <div>
+                          <p className="font-black text-sm text-gray-900 uppercase tracking-tight">{sup.name}</p>
+                          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">Uploaded by {sup.uploadedBy?.name}</p>
+                       </div>
+                       <button 
+                        onClick={() => handleDeleteSupplement(sup._id)}
+                        className="text-gray-300 hover:text-red-500 transition-colors"
+                       >
+                         <Trash2 className="w-4 h-4" />
+                       </button>
+                    </div>
+                 ))}
+                 {supplements.length === 0 && (
+                   <div className="p-10 text-center text-xs font-bold text-gray-400 uppercase tracking-widest italic">No documents uploaded yet.</div>
+                 )}
+              </div>
+           </div>
         </div>
       )}
     </div>

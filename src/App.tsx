@@ -9,6 +9,8 @@ import DataBank from './pages/DataBank';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import SharedData from './pages/SharedData';
+import VisitingCard from './pages/VisitingCard';
+import Documents from './pages/Documents';
 
 function App() {
   return (
@@ -21,8 +23,10 @@ function App() {
             <Route index element={<Dashboard />} />
             <Route path="entry" element={<Entry />} />
             <Route path="data-bank" element={<DataBank />} />
-            <Route path="shared-data" element={<SharedData />} />
+            <Route path="shared-leads" element={<SharedData />} />
             <Route path="reports" element={<Reports />} />
+            <Route path="my-card" element={<VisitingCard />} />
+            <Route path="documents" element={<Documents />} />
             
             <Route path="settings" element={
               <ProtectedRoute roles={['Admin', 'Owner']}>

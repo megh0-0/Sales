@@ -20,13 +20,14 @@
     "@capacitor/core": "^8.0.2",
     "@capacitor/filesystem": "^8.0.0",
     "axios": "^1.6.2",
+    "clsx": "^2.0.0",
+    "date-fns": "^2.30.0",
     "lucide-react": "^0.294.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-easy-crop": "^5.5.7",
     "react-router-dom": "^6.21.0",
     "recharts": "^2.10.3",
-    "date-fns": "^2.30.0",
-    "clsx": "^2.0.0",
     "tailwind-merge": "^2.1.0"
   },
   "devDependencies": {
