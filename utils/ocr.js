@@ -110,7 +110,7 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
   const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
   if (geminiKey && geminiKey !== 'your_google_api_key' && imageBuffer) {
-    const modelsToTry = ["gemini-2.5-flash", "gemini-flash-latest"];
+    const modelsToTry = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-flash-latest"];
     const base64Image = imageBuffer.toString('base64');
 
     for (const modelName of modelsToTry) {
@@ -130,7 +130,13 @@ async function parseCardIntelligence(fullText, detections, qrData, contextLeads 
         };
 
         const response = await axios.post(url, payload, { timeout: 15000 });
-        const aiText = response.data.candidates[0].content.parts[0].text;
+        let aiText = response.data.candidates[0].content.parts[0].text;
+        
+        // Clean up markdown code blocks if present
+        if (aiText.includes('```')) {
+          aiText = aiText.replace(/```json|```/g, '').trim();
+        }
+
         const aiResult = JSON.parse(aiText);
 
         if (aiResult) {
