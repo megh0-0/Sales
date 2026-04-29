@@ -25,11 +25,9 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
     const processedResults = await Promise.all(processPromises);
     
     const results = [];
-    const rotatedImages = [];
     
-    processedResults.forEach(({ parsed, rotatedImage }) => {
+    processedResults.forEach(({ parsed }) => {
       results.push(parsed);
-      if (rotatedImage) rotatedImages.push(`data:image/jpeg;base64,${rotatedImage.toString('base64')}`);
     });
 
     const mergedData = {
@@ -44,7 +42,7 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
     mergedData.companyName = allCompanies.find(c => /Ltd|Limited|Pvt|Inc|Corp/i.test(c)) || allCompanies[0] || '';
 
     const allNames = results.map(r => r.contactPersonName).filter(n => n);
-    const namePrefixes = ['Engr.', 'Md.', 'Mr.', 'Mrs.', 'Ms.', 'Dr.'];
+    const namePrefixes = ['Engr.', 'Md.', 'Mr.', 'Mrs.', 'Ms.', 'Dr.', 'S.M.', 'Sheikh', 'Mohammad', 'Mohamed'];
     mergedData.contactPersonName = allNames.find(n => namePrefixes.some(p => n.includes(p))) || allNames[0] || '';
 
     const allDesigs = results.map(r => r.designation).filter(d => d);
@@ -57,7 +55,7 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
 
     console.log('[DEBUG] Final Merged OCR Data:', JSON.stringify(mergedData, null, 2));
 
-    res.json({ parsedData: mergedData, rotatedImages });
+    res.json({ parsedData: mergedData });
   } catch (error) { 
     console.error('OCR Endpoint Error:', error);
     res.status(500).json({ message: `OCR failed: ${error.message}` }); 
