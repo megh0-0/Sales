@@ -96,6 +96,21 @@ router.post('/', protect, upload.fields([{ name: 'visitingCardFront', maxCount: 
     if (req.files.visitingCardBack) leadData.visitingCardBack = await uploadToDrive(req.files.visitingCardBack[0].buffer, `CardBack_${Date.now()}`, req.files.visitingCardBack[0].mimetype);
     if (req.files.attachment) leadData.attachment = await uploadToDrive(req.files.attachment[0].buffer, `Attach_${Date.now()}`, req.files.attachment[0].mimetype);
     const lead = await Lead.create(leadData);
+
+    // Notify Managers
+    if (req.user.role === 'Employee') {
+       const userWithManagers = await User.findById(req.user._id).populate('managers');
+       if (userWithManagers?.managers?.length > 0) {
+          for (const manager of userWithManagers.managers) {
+             await sendPushNotification(manager._id, {
+                title: 'New Entry Added',
+                body: `${req.user.name} added a new lead: ${lead.companyName}`,
+                data: { url: '/data-bank' }
+             });
+          }
+       }
+    }
+
     res.status(201).json(lead);
   } catch (error) { res.status(400).json({ message: error.message }); }
 });
@@ -187,12 +202,24 @@ router.put('/:id', protect, upload.single('attachment'), async (req, res) => {
          const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
          const monthLeads = await Lead.find({ enteredBy: updatedLead.enteredBy, status: 'Sales Complete', updatedAt: { $gte: monthStart } });
          const totalSales = monthLeads.reduce((sum, l) => sum + (l.projectValue || 0), 0);
+         
          await sendPushNotification(updatedLead.enteredBy, {
            title: '🎉 Sales Complete!',
-           body: `You closed ${updatedLead.companyName}. Monthly: ৳${totalSales.toLocaleString()}`,
-           data: { url: '/dashboard' }
+           body: `You closed ${updatedLead.companyName}. Monthly Total: ৳${totalSales.toLocaleString()}`,
+           data: { url: '/reports' }
          });
-       } catch (e) {}
+
+         // Target Accomplished Notif
+         if (creator.monthlyTarget > 0 && totalSales >= creator.monthlyTarget && (totalSales - (updatedLead.projectValue || 0)) < creator.monthlyTarget) {
+            await sendPushNotification(updatedLead.enteredBy, {
+              title: '🎯 Target Accomplished!',
+              body: `Congratulations! You've reached your monthly target of ৳${creator.monthlyTarget.toLocaleString()}.`,
+              data: { url: '/dashboard' }
+            });
+         }
+       } catch (e) {
+         console.error('Notification error in update route:', e);
+       }
     }
 
     res.json(updatedLead);
