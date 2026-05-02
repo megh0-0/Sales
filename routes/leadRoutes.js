@@ -98,10 +98,36 @@ router.get('/shared', protect, async (req, res) => {
 // @desc    Create lead
 router.post('/', protect, upload.fields([{ name: 'visitingCardFront', maxCount: 1 }, { name: 'visitingCardBack', maxCount: 1 }, { name: 'attachment', maxCount: 1 }]), async (req, res) => {
   try {
-    let leadData = { ...req.body, enteredBy: req.user._id, phoneNumbers: JSON.parse(req.body.phoneNumbers || '[]'), emails: JSON.parse(req.body.emails || '[]'), addresses: JSON.parse(req.body.addresses || '[]') };
-    if (req.files.visitingCardFront) leadData.visitingCardFront = await uploadToDrive(req.files.visitingCardFront[0].buffer, `CardFront_${Date.now()}`, req.files.visitingCardFront[0].mimetype);
-    if (req.files.visitingCardBack) leadData.visitingCardBack = await uploadToDrive(req.files.visitingCardBack[0].buffer, `CardBack_${Date.now()}`, req.files.visitingCardBack[0].mimetype);
-    if (req.files.attachment) leadData.attachment = await uploadToDrive(req.files.attachment[0].buffer, `Attach_${Date.now()}`, req.files.attachment[0].mimetype);
+    const companyName = req.body.companyName || 'Unknown_Company';
+    const folderName = `${companyName}_${Date.now()}`;
+    let driveFolderId = null;
+
+    // 1. Create a dedicated folder for this company/lead
+    try {
+      driveFolderId = await createDriveFolder(folderName);
+    } catch (err) {
+      console.error('Failed to create drive folder, falling back to base folder');
+    }
+
+    let leadData = { 
+      ...req.body, 
+      enteredBy: req.user._id, 
+      driveFolderId,
+      phoneNumbers: JSON.parse(req.body.phoneNumbers || '[]'), 
+      emails: JSON.parse(req.body.emails || '[]'), 
+      addresses: JSON.parse(req.body.addresses || '[]') 
+    };
+
+    if (req.files.visitingCardFront) {
+      leadData.visitingCardFront = await uploadToDrive(req.files.visitingCardFront[0].buffer, `VC_Front_${companyName}_${Date.now()}`, req.files.visitingCardFront[0].mimetype, driveFolderId);
+    }
+    if (req.files.visitingCardBack) {
+      leadData.visitingCardBack = await uploadToDrive(req.files.visitingCardBack[0].buffer, `VC_Back_${companyName}_${Date.now()}`, req.files.visitingCardBack[0].mimetype, driveFolderId);
+    }
+    if (req.files.attachment) {
+      leadData.attachment = await uploadToDrive(req.files.attachment[0].buffer, `Attachment_${companyName}_${Date.now()}`, req.files.attachment[0].mimetype, driveFolderId);
+    }
+
     const lead = await Lead.create(leadData);
 
     // Notify Managers
@@ -119,7 +145,10 @@ router.post('/', protect, upload.fields([{ name: 'visitingCardFront', maxCount: 
     }
 
     res.status(201).json(lead);
-  } catch (error) { res.status(400).json({ message: error.message }); }
+  } catch (error) { 
+    console.error('Lead creation error:', error);
+    res.status(400).json({ message: error.message }); 
+  }
 });
 
 // @desc    Update a lead (Universal Multi-format Fix)
@@ -133,6 +162,8 @@ router.put('/:id', protect, upload.single('attachment'), async (req, res) => {
     
     const body = req.body;
     const updateData = {};
+    const companyName = body.companyName || lead.companyName;
+    const driveFolderId = lead.driveFolderId;
     
     console.log("DEBUG: Full req.body received:", JSON.stringify(body, null, 2));
 
@@ -187,7 +218,7 @@ router.put('/:id', protect, upload.single('attachment'), async (req, res) => {
     // 5. Handle File Upload
     if (req.file) {
       console.log("New attachment detected, uploading to Drive...");
-      updateData.attachment = await uploadToDrive(req.file.buffer, `Attachment_${Date.now()}`, req.file.mimetype);
+      updateData.attachment = await uploadToDrive(req.file.buffer, `Attachment_${companyName}_${Date.now()}`, req.file.mimetype, driveFolderId);
     }
     
     console.log("Final data to be saved to DB:", JSON.stringify(updateData, null, 2));

@@ -42,6 +42,7 @@ const leadSchema = new mongoose.Schema({
     note: { type: String, trim: true }
   }],
   enteredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  driveFolderId: { type: String }, // Google Drive Folder ID for this specific lead
   shares: [{
     sharedWith: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     sharedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
