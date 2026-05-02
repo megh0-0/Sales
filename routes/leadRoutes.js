@@ -66,7 +66,14 @@ router.post('/ocr', protect, upload.array('images', 2), async (req, res) => {
 router.get('/', protect, async (req, res) => {
   try {
     let query = {};
-    if (req.user.role === 'Employee') query.enteredBy = req.user._id;
+    if (req.user.role === 'Employee') {
+      query = {
+        $or: [
+          { enteredBy: req.user._id },
+          { 'shares.sharedWith': req.user._id }
+        ]
+      };
+    }
     const leads = await Lead.find(query)
       .populate('enteredBy', 'name phone')
       .populate('shares.sharedWith', 'name role')
@@ -300,14 +307,21 @@ router.get('/dashboard-stats', protect, async (req, res) => {
     const user = await User.findById(userId);
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
+    const query = {
+      $or: [
+        { enteredBy: userId },
+        { 'shares.sharedWith': userId }
+      ]
+    };
+
     const leads = await Lead.find({
-      enteredBy: userId,
-      status: 'Closed', // Assuming 'Closed' means Sales Complete
+      ...query,
+      status: 'Sales Complete',
       updatedAt: { $gte: monthStart }
     });
 
     const completed = leads.reduce((sum, lead) => sum + (lead.projectValue || 0), 0);
-    const totalLeads = await Lead.countDocuments({ enteredBy: userId });
+    const totalLeads = await Lead.countDocuments(query);
 
     res.json({
       totalLeads,
@@ -327,11 +341,14 @@ router.get('/upcoming-followups', protect, async (req, res) => {
     const startOfToday = new Date(today.setHours(0, 0, 0, 0));
 
     const leads = await Lead.find({
-      enteredBy: userId,
+      $or: [
+        { enteredBy: userId },
+        { 'shares.sharedWith': userId }
+      ],
       'followUps.date': { $gte: startOfToday }
     }).select('companyName followUps');
 
-    const followUps = leads.flatMap(lead => 
+    const followUps = leads.flatMap(lead =>
       lead.followUps
         .filter(f => new Date(f.date) >= startOfToday)
         .map(f => ({
@@ -346,5 +363,4 @@ router.get('/upcoming-followups', protect, async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
-
 module.exports = { router };

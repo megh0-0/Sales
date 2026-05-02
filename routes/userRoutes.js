@@ -7,7 +7,7 @@ const { uploadToDrive } = require('../utils/googleDrive');
 
 // @desc    Get all users
 // @route   GET /api/users
-router.get('/', protect, authorize('Admin', 'Owner', 'Manager'), async (req, res) => {
+router.get('/', protect, authorize('Admin', 'Owner', 'Manager', 'Employee'), async (req, res) => {
   try {
     const users = await User.find({}).populate('managers', 'name phone');
     res.json(users);
